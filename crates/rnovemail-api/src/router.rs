@@ -72,6 +72,18 @@ impl AppState {
         Ok(provider)
     }
 
+    pub(crate) fn provider_for_sender(
+        &self,
+        sender: &EmailAddress,
+    ) -> Result<ProviderAccount, ApiRejection> {
+        let data = self.read_data()?;
+        data.providers
+            .iter()
+            .find(|provider| provider.serves_domain(sender.domain()))
+            .cloned()
+            .ok_or(ApiRejection::NoProviderForDomain)
+    }
+
     pub(crate) fn add_mailbox(
         &self,
         owner_email: EmailAddress,

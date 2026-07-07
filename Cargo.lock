@@ -1389,6 +1389,7 @@ dependencies = [
  "async-trait",
  "reqwest",
  "rnovemail-domain",
+ "rnovemail-webhook",
  "secrecy",
  "serde",
  "serde_json",
@@ -1424,6 +1425,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror",
+ "zeroize",
 ]
 
 [[package]]
@@ -1436,6 +1438,7 @@ dependencies = [
  "hmac 0.12.1",
  "serde",
  "sha2 0.10.9",
+ "subtle",
  "thiserror",
 ]
 

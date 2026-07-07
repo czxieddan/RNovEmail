@@ -115,6 +115,7 @@ pub struct ProviderSendReceipt {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProviderWebhookRequest {
+    pub id: String,
     pub signature: String,
     pub timestamp: String,
     pub body: Vec<u8>,
