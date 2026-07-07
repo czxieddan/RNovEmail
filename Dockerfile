@@ -18,7 +18,9 @@ RUN --mount=type=cache,target=/usr/local/cargo/git \
     cargo build --release -p rnovemail-bin
 
 FROM debian:bookworm-slim
-RUN useradd --system --uid 10001 --home /nonexistent --shell /usr/sbin/nologin rnovemail
+RUN useradd --system --uid 10001 --home /nonexistent --shell /usr/sbin/nologin rnovemail \
+    && mkdir -p /var/lib/rnovemail \
+    && chown -R rnovemail:rnovemail /var/lib/rnovemail
 WORKDIR /app
 COPY --from=builder /app/target/release/rnovemail /usr/local/bin/rnovemail
 USER 10001

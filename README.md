@@ -21,3 +21,11 @@ Build the container image:
 ```bash
 docker build -t rnovemail:local .
 ```
+
+Run with Docker Compose:
+
+```bash
+mkdir -p secrets
+openssl rand -base64 32 > secrets/rnovemail_master_key
+RNOVEMAIL_BOOTSTRAP_ADMIN_TOKEN=change-me docker compose up --build
+```

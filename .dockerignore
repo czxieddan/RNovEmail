@@ -5,6 +5,7 @@ test-data/
 plans/
 artifacts/
 tmp/
+secrets/
 .env
 .env.*
 .git/

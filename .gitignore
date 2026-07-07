@@ -6,6 +6,7 @@
 /plans/
 /artifacts/
 /tmp/
+/secrets/
 
 # Test code and test assets stay outside the repository
 /tests/

@@ -1,0 +1,31 @@
+services:
+  rnovemail:
+    image: rnovemail:local
+    build:
+      context: .
+      args:
+        HTTP_PROXY: ${HTTP_PROXY:-}
+        HTTPS_PROXY: ${HTTPS_PROXY:-}
+        ALL_PROXY: ${ALL_PROXY:-}
+        NO_PROXY: ${NO_PROXY:-}
+    ports:
+      - "18089:18089"
+    environment:
+      RNOVEMAIL_BIND: 0.0.0.0:18089
+      RNOVEMAIL_PUBLIC_BASE_URL: ${RNOVEMAIL_PUBLIC_BASE_URL:-http://localhost:18089}
+      RNOVEMAIL_DATA_DIR: /var/lib/rnovemail
+      RNOVEMAIL_MASTER_KEY_FILE: /run/secrets/rnovemail_master_key
+      RNOVEMAIL_BOOTSTRAP_ADMIN_TOKEN: ${RNOVEMAIL_BOOTSTRAP_ADMIN_TOKEN:?set RNOVEMAIL_BOOTSTRAP_ADMIN_TOKEN}
+      RNOVEMAIL_LOG_FORMAT: ${RNOVEMAIL_LOG_FORMAT:-json}
+    volumes:
+      - rnovemail-data:/var/lib/rnovemail
+    secrets:
+      - rnovemail_master_key
+    restart: unless-stopped
+
+secrets:
+  rnovemail_master_key:
+    file: ./secrets/rnovemail_master_key
+
+volumes:
+  rnovemail-data:
