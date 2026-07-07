@@ -33,7 +33,7 @@ async fn create_user(
     if let Err(rejection) = state.require_admin(&headers) {
         return rejection.into_response();
     }
-    create_user_response(&state, request).into_response()
+    create_user_response(&state, request).await.into_response()
 }
 
 async fn update_user(
@@ -52,7 +52,9 @@ async fn create_domain(
     if let Err(rejection) = state.require_admin(&headers) {
         return rejection.into_response();
     }
-    create_domain_response(&state, request).into_response()
+    create_domain_response(&state, request)
+        .await
+        .into_response()
 }
 
 async fn update_domain(
@@ -71,7 +73,9 @@ async fn create_provider(
     if let Err(rejection) = state.require_admin(&headers) {
         return rejection.into_response();
     }
-    create_provider_response(&state, request).into_response()
+    create_provider_response(&state, request)
+        .await
+        .into_response()
 }
 
 async fn update_provider(
@@ -90,7 +94,9 @@ async fn create_mailbox(
     if let Err(rejection) = state.require_admin(&headers) {
         return rejection.into_response();
     }
-    create_mailbox_response(&state, request).into_response()
+    create_mailbox_response(&state, request)
+        .await
+        .into_response()
 }
 
 async fn update_mailbox(
@@ -108,45 +114,47 @@ fn admin_accept(state: &AppState, headers: HeaderMap, accepted: &'static str) ->
     axum::Json(serde_json::json!({ "status": accepted })).into_response()
 }
 
-fn create_user_response(
+async fn create_user_response(
     state: &AppState,
     request: CreateUserRequest,
 ) -> Result<Json<UserResponse>, ApiRejection> {
     let email = EmailAddress::parse(&request.email).map_err(|_| ApiRejection::BadRequest)?;
-    let user = state.add_user(request.display_name, email, request.roles)?;
+    let user = state
+        .add_user(request.display_name, email, request.roles)
+        .await?;
     Ok(Json(UserResponse::from_user(&user)))
 }
 
-fn create_domain_response(
+async fn create_domain_response(
     state: &AppState,
     request: CreateDomainRequest,
 ) -> Result<Json<DomainResponse>, ApiRejection> {
     let domain = DomainName::parse(&request.domain).map_err(|_| ApiRejection::BadRequest)?;
-    let domain = state.add_domain(domain)?;
+    let domain = state.add_domain(domain).await?;
     Ok(Json(DomainResponse {
         domain: domain.as_str().to_string(),
     }))
 }
 
-fn create_provider_response(
+async fn create_provider_response(
     state: &AppState,
     request: CreateProviderRequest,
 ) -> Result<Json<ProviderResponse>, ApiRejection> {
     let provider_type = parse_provider(&request.provider_type)?;
     let domains = parse_domains(request.domains)?;
     let provider = ProviderAccount::new(provider_type, request.name, domains);
-    let provider = state.add_provider(provider)?;
+    let provider = state.add_provider(provider, request.webhook_secret).await?;
     Ok(Json(ProviderResponse::from_provider(&provider)))
 }
 
-fn create_mailbox_response(
+async fn create_mailbox_response(
     state: &AppState,
     request: CreateMailboxRequest,
 ) -> Result<Json<MailboxResponse>, ApiRejection> {
     let owner = EmailAddress::parse(&request.owner_email).map_err(|_| ApiRejection::BadRequest)?;
     let mailbox =
         EmailAddress::parse(&request.mailbox_email).map_err(|_| ApiRejection::BadRequest)?;
-    let mailbox = state.add_mailbox(owner, mailbox)?;
+    let mailbox = state.add_mailbox(owner, mailbox).await?;
     Ok(Json(MailboxResponse {
         email: mailbox.address().as_str().to_string(),
     }))
@@ -184,6 +192,7 @@ struct CreateProviderRequest {
     name: String,
     provider_type: String,
     domains: Vec<String>,
+    webhook_secret: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -214,6 +223,7 @@ struct DomainResponse {
 
 #[derive(Serialize)]
 struct ProviderResponse {
+    id: String,
     provider_type: String,
 }
 
@@ -221,6 +231,7 @@ impl ProviderResponse {
     fn from_provider(provider: &ProviderAccount) -> Self {
         match provider.provider_type() {
             ProviderType::Resend => Self {
+                id: serialized_key(&provider.id()),
                 provider_type: "resend".to_string(),
             },
         }
@@ -230,4 +241,15 @@ impl ProviderResponse {
 #[derive(Serialize)]
 struct MailboxResponse {
     email: String,
+}
+
+fn serialized_key<T: Serialize>(value: &T) -> String {
+    serde_json::to_value(value)
+        .ok()
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .unwrap_or_else(|| fallback_key(value))
+}
+
+fn fallback_key<T: Serialize>(value: &T) -> String {
+    serde_json::to_string(value).unwrap_or_else(|_| "unknown".to_string())
 }

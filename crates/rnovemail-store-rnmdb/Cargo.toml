@@ -6,6 +6,7 @@ rust-version.workspace = true
 version.workspace = true
 
 [dependencies]
+async-trait.workspace = true
 rnmdb-common.workspace = true
 rnmdb-instance.workspace = true
 rnmdb-security.workspace = true
@@ -14,5 +15,6 @@ rnovemail-domain = { path = "../rnovemail-domain" }
 rnovemail-store = { path = "../rnovemail-store" }
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
 thiserror.workspace = true
 zeroize.workspace = true

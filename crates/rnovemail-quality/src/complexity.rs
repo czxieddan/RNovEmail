@@ -59,7 +59,32 @@ fn function_name(block: &str) -> &str {
 }
 
 fn function_body(block: &str) -> &str {
-    block.split("\nfn ").next().unwrap_or(block)
+    let Some(start) = block.find('{') else {
+        return block;
+    };
+    match body_end(&block[start..]) {
+        Some(end) => &block[start..=start + end],
+        None => block,
+    }
+}
+
+fn body_end(source: &str) -> Option<usize> {
+    let mut depth = 0_usize;
+    for (index, ch) in source.char_indices() {
+        depth = next_depth(depth, ch)?;
+        if depth == 0 {
+            return Some(index);
+        }
+    }
+    None
+}
+
+fn next_depth(depth: usize, ch: char) -> Option<usize> {
+    match ch {
+        '{' => depth.checked_add(1),
+        '}' => depth.checked_sub(1),
+        _ => Some(depth),
+    }
 }
 
 fn complexity_score(body: &str) -> usize {

@@ -1,10 +1,10 @@
 # RNovEmail
 
-RNovEmail is planned as a Rust-only internal mail service for organizations that need controlled mailbox assignment, provider-backed delivery, provider webhook intake, API automation, and Docker/Web deployment.
+RNovEmail is a Rust-only internal mail service for organizations that need controlled mailbox assignment, provider-backed delivery, provider webhook intake, API automation, and Docker/Web deployment.
 
-The service will embed `RNovModularDB` as a pinned Cargo git dependency. Self-registration is intentionally unsupported; users and mailboxes are assigned through the admin surface or API.
+It embeds `RNovModularDB` as pinned Cargo git dependencies and stores service data in a local `.rnmdb` file. Self-registration is intentionally unsupported; users and mailboxes are assigned through admin/API flows.
 
-This repository keeps production code and visitor-facing documentation only. Local plans, test code, test assets, and build outputs are ignored.
+This repository keeps production code and visitor-facing documentation only. Local plans, tests, test assets, and build outputs are ignored.
 
 ## Run
 
@@ -13,6 +13,8 @@ Set the required environment values from `.env.example`, then run the service:
 ```bash
 cargo run -p rnovemail-bin
 ```
+
+The default bind address is `127.0.0.1:18089`.
 
 Build the container image:
 

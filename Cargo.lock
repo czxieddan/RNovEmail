@@ -1312,13 +1312,16 @@ name = "rnovemail-api"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "rnovemail-admin",
  "rnovemail-auth",
  "rnovemail-domain",
  "rnovemail-providers",
  "rnovemail-store",
  "rnovemail-webhook",
+ "secrecy",
  "serde",
  "serde_json",
+ "subtle",
  "thiserror",
  "tower-http",
  "utoipa",
@@ -1347,6 +1350,8 @@ dependencies = [
  "rnovemail-api",
  "rnovemail-config",
  "rnovemail-observability",
+ "rnovemail-store-rnmdb",
+ "secrecy",
  "tokio",
  "tracing",
 ]
@@ -1416,6 +1421,7 @@ dependencies = [
 name = "rnovemail-store-rnmdb"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "rnmdb-common",
  "rnmdb-instance",
  "rnmdb-security",
@@ -1424,6 +1430,7 @@ dependencies = [
  "rnovemail-store",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "thiserror",
  "zeroize",
 ]

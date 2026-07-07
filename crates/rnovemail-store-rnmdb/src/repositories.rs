@@ -3,14 +3,23 @@ use std::{
     sync::Mutex,
 };
 
-use crate::MigrationPlan;
 use crate::schema::RNOVEMAIL_NAMESPACES;
+use crate::{MigrationPlan, keys::namespace_key};
+use async_trait::async_trait;
 use rnmdb_common::ids::PageId;
 use rnmdb_storage::{
     Page, PageCryptoKey, PageSize, SingleFileBackend, SingleFileOptions, StorageBackend, SyncStatus,
 };
-use rnovemail_store::StoreError;
-use serde::{Deserialize, Serialize};
+use rnovemail_domain::{
+    AuditEvent, DomainName, EmailAddress, InboundMessage, Mailbox, OutboundMessage,
+    ProviderAccount, User,
+};
+use rnovemail_store::{
+    AuditRepository, DomainRepository, MailboxRepository, MessageRepository, ProviderRepository,
+    StoreError, TokenRepository, UserRepository, WebhookRepository,
+};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use sha2::{Digest, Sha256};
 use zeroize::Zeroize;
 
 const DATABASE_FILE: &str = "rnovemail.rnmdb";
@@ -25,6 +34,14 @@ pub struct RnovStoreKey([u8; 32]);
 impl RnovStoreKey {
     pub fn from_bytes(bytes: [u8; 32]) -> Self {
         Self(bytes)
+    }
+
+    pub fn derive_from_master_key(material: &[u8]) -> Result<Self, StoreError> {
+        reject_empty_key_material(material)?;
+        let digest = page_key_digest(material);
+        let mut key = [0_u8; 32];
+        key.copy_from_slice(&digest);
+        Ok(Self(key))
     }
 
     fn page_crypto_key(mut self) -> PageCryptoKey {
@@ -50,6 +67,20 @@ impl From<[u8; 32]> for RnovStoreKey {
     fn from(bytes: [u8; 32]) -> Self {
         Self::from_bytes(bytes)
     }
+}
+
+fn reject_empty_key_material(material: &[u8]) -> Result<(), StoreError> {
+    match material.iter().all(|byte| byte.is_ascii_whitespace()) {
+        true => Err(StoreError::OperationFailed),
+        false => Ok(()),
+    }
+}
+
+fn page_key_digest(material: &[u8]) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(b"rnovemail:rnmdb:v1:page-key");
+    hasher.update(material);
+    hasher.finalize().into()
 }
 
 pub struct RnovStore {
@@ -103,6 +134,17 @@ impl RnovStore {
         Ok(record.map(|record| record.value))
     }
 
+    pub fn list_raw(&self, namespace: &str) -> Result<Vec<(String, Vec<u8>)>, StoreError> {
+        ensure_namespace(namespace)?;
+        let backend = self.backend()?;
+        let meta = load_meta(&backend)?;
+        let records = list_records(&backend, &meta, namespace)?;
+        Ok(records
+            .into_iter()
+            .map(|record| (record.key, record.value))
+            .collect())
+    }
+
     pub fn sync_status(&self) -> Result<SyncStatus, StoreError> {
         self.backend()?
             .sync()
@@ -111,6 +153,124 @@ impl RnovStore {
 
     fn backend(&self) -> Result<std::sync::MutexGuard<'_, SingleFileBackend>, StoreError> {
         self.backend.lock().map_err(|_| StoreError::OperationFailed)
+    }
+}
+
+#[async_trait]
+impl UserRepository for RnovStore {
+    async fn put_user(&self, user: User) -> Result<(), StoreError> {
+        put_typed(self, "users_by_email", user.primary_email().as_str(), &user)
+    }
+
+    async fn get_user_by_email(&self, email: &EmailAddress) -> Result<User, StoreError> {
+        get_required(self, "users_by_email", email.as_str())
+    }
+
+    async fn list_users(&self) -> Result<Vec<User>, StoreError> {
+        list_typed(self, "users_by_email")
+    }
+}
+
+#[async_trait]
+impl DomainRepository for RnovStore {
+    async fn put_domain(&self, domain: DomainName) -> Result<(), StoreError> {
+        put_typed(self, "domains_by_name", domain.as_str(), &domain)
+    }
+
+    async fn contains_domain(&self, domain: &DomainName) -> Result<bool, StoreError> {
+        self.get_raw("domains_by_name", domain.as_str())
+            .map(|record| record.is_some())
+    }
+
+    async fn list_domains(&self) -> Result<Vec<DomainName>, StoreError> {
+        list_typed(self, "domains_by_name")
+    }
+}
+
+#[async_trait]
+impl MailboxRepository for RnovStore {
+    async fn put_mailbox(&self, mailbox: Mailbox) -> Result<(), StoreError> {
+        put_typed(
+            self,
+            "mailboxes_by_email",
+            mailbox.address().as_str(),
+            &mailbox,
+        )
+    }
+
+    async fn get_mailbox_by_email(&self, email: &EmailAddress) -> Result<Mailbox, StoreError> {
+        get_required(self, "mailboxes_by_email", email.as_str())
+    }
+
+    async fn list_mailboxes(&self) -> Result<Vec<Mailbox>, StoreError> {
+        list_typed(self, "mailboxes_by_email")
+    }
+}
+
+#[async_trait]
+impl ProviderRepository for RnovStore {
+    async fn put_provider(&self, provider: ProviderAccount) -> Result<(), StoreError> {
+        put_typed(
+            self,
+            "provider_accounts_by_id",
+            &json_key(&provider.id())?,
+            &provider,
+        )
+    }
+
+    async fn list_providers(&self) -> Result<Vec<ProviderAccount>, StoreError> {
+        list_typed(self, "provider_accounts_by_id")
+    }
+}
+
+#[async_trait]
+impl MessageRepository for RnovStore {
+    async fn put_outbound(&self, message: OutboundMessage) -> Result<(), StoreError> {
+        put_typed(
+            self,
+            "outbound_messages_by_id",
+            &json_key(&message.id)?,
+            &message,
+        )
+    }
+
+    async fn put_inbound(&self, message: InboundMessage) -> Result<(), StoreError> {
+        put_typed(
+            self,
+            "inbound_messages_by_id",
+            &json_key(&message.id)?,
+            &message,
+        )
+    }
+}
+
+#[async_trait]
+impl WebhookRepository for RnovStore {
+    async fn remember_event(&self, provider: &str, event_id: &str) -> Result<bool, StoreError> {
+        let key = namespace_key(provider, event_id);
+        match self.get_raw("webhook_events_by_provider_event", &key)? {
+            Some(_) => Ok(false),
+            None => put_typed(self, "webhook_events_by_provider_event", &key, &true).map(|_| true),
+        }
+    }
+}
+
+#[async_trait]
+impl TokenRepository for RnovStore {
+    async fn put_token_hash(&self, prefix: String, hash: String) -> Result<(), StoreError> {
+        put_typed(self, "api_tokens_by_prefix", &prefix, &hash)
+    }
+
+    async fn get_token_hash(&self, prefix: &str) -> Result<String, StoreError> {
+        get_required(self, "api_tokens_by_prefix", prefix)
+    }
+}
+
+#[async_trait]
+impl AuditRepository for RnovStore {
+    async fn append_audit(&self, event: AuditEvent) -> Result<(), StoreError> {
+        let key = audit_key(&event);
+        put_typed(self, "audit_events_by_time", &key, &event)
     }
 }
 
@@ -219,6 +379,33 @@ fn find_record(
         return Ok(None);
     };
     read_raw_page(backend, page_id).map(Some)
+}
+
+fn list_records(
+    backend: &SingleFileBackend,
+    meta: &StoreMeta,
+    namespace: &str,
+) -> Result<Vec<RawRecord>, StoreError> {
+    let mut records = Vec::new();
+    for page_id in meta.record_page_ids() {
+        append_matching_record(backend, page_id, namespace, &mut records)?;
+    }
+    Ok(records)
+}
+
+fn append_matching_record(
+    backend: &SingleFileBackend,
+    page_id: PageId,
+    namespace: &str,
+    records: &mut Vec<RawRecord>,
+) -> Result<(), StoreError> {
+    let Some(record) = maybe_read_raw_page(backend, page_id)? else {
+        return Ok(());
+    };
+    if record.namespace == namespace {
+        records.push(record);
+    }
+    Ok(())
 }
 
 fn find_record_page(
@@ -334,4 +521,44 @@ fn record_len(payload: &[u8]) -> Result<usize, StoreError> {
         .get(..RECORD_HEADER_BYTES)
         .ok_or(StoreError::OperationFailed)?;
     Ok(u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as usize)
+}
+
+fn put_typed<T: Serialize>(
+    store: &RnovStore,
+    namespace: &str,
+    key: &str,
+    value: &T,
+) -> Result<(), StoreError> {
+    let encoded = serde_json::to_vec(value).map_err(|_| StoreError::OperationFailed)?;
+    store.put_raw(namespace, key, &encoded)
+}
+
+fn get_required<T: DeserializeOwned>(
+    store: &RnovStore,
+    namespace: &str,
+    key: &str,
+) -> Result<T, StoreError> {
+    let Some(record) = store.get_raw(namespace, key)? else {
+        return Err(StoreError::NotFound);
+    };
+    serde_json::from_slice(&record).map_err(|_| StoreError::OperationFailed)
+}
+
+fn list_typed<T: DeserializeOwned>(
+    store: &RnovStore,
+    namespace: &str,
+) -> Result<Vec<T>, StoreError> {
+    store
+        .list_raw(namespace)?
+        .into_iter()
+        .map(|(_, value)| serde_json::from_slice(&value).map_err(|_| StoreError::OperationFailed))
+        .collect()
+}
+
+fn json_key<T: Serialize>(value: &T) -> Result<String, StoreError> {
+    serde_json::to_string(value).map_err(|_| StoreError::OperationFailed)
+}
+
+fn audit_key(event: &AuditEvent) -> String {
+    format!("{}:{}", event.at.to_rfc3339(), event.request_id)
 }

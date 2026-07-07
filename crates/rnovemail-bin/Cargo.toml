@@ -15,5 +15,7 @@ axum.workspace = true
 rnovemail-api = { path = "../rnovemail-api" }
 rnovemail-config = { path = "../rnovemail-config" }
 rnovemail-observability = { path = "../rnovemail-observability" }
+rnovemail-store-rnmdb = { path = "../rnovemail-store-rnmdb" }
+secrecy.workspace = true
 tokio.workspace = true
 tracing.workspace = true
