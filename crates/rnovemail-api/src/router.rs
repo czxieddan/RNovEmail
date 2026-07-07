@@ -5,7 +5,8 @@ use std::{
 
 use axum::{Json, Router, http::HeaderMap, response::IntoResponse, routing::get};
 use rnovemail_domain::{
-    DomainName, EmailAddress, Mailbox, ProviderAccount, ProviderType, User, UserRole,
+    AuditActor, AuditEvent, AuditResult, DomainName, EmailAddress, Mailbox, ProviderAccount,
+    ProviderType, User, UserRole,
 };
 use rnovemail_providers::{MailProvider, ProviderEvent, ProviderWebhookRequest, ResendProvider};
 use rnovemail_store::{AppStore, StoreError};
@@ -82,6 +83,7 @@ impl AppState {
         let user = User::assign(display_name, email.clone(), roles);
         if let Some(store) = self.store() {
             store.put_user(user.clone()).await.map_err(store_error)?;
+            append_audit(store, "admin.user.create", email.as_str()).await?;
         }
         let mut data = self.write_data()?;
         data.users.insert(email.as_str().to_string(), user.clone());
@@ -94,6 +96,7 @@ impl AppState {
                 .put_domain(domain.clone())
                 .await
                 .map_err(store_error)?;
+            append_audit(store, "admin.domain.create", domain.as_str()).await?;
         }
         let mut data = self.write_data()?;
         data.domains.insert(domain.clone());
@@ -111,6 +114,7 @@ impl AppState {
                 .put_provider(provider.clone())
                 .await
                 .map_err(store_error)?;
+            append_audit(store, "admin.provider.create", &provider_key(&provider)).await?;
         }
         let mut data = self.write_data()?;
         insert_webhook_binding(&mut data, &provider, binding);
@@ -142,6 +146,7 @@ impl AppState {
                 .put_mailbox(mailbox.clone())
                 .await
                 .map_err(store_error)?;
+            append_audit(store, "admin.mailbox.create", mailbox_email.as_str()).await?;
         }
         let mut data = self.write_data()?;
         data.mailboxes
@@ -363,6 +368,21 @@ async fn remember_persistent_event(
         true => Ok(()),
         false => Err(ApiRejection::DuplicateWebhookEvent),
     }
+}
+
+async fn append_audit(
+    store: Arc<dyn AppStore>,
+    action: &str,
+    target: &str,
+) -> Result<(), ApiRejection> {
+    let event = AuditEvent::new(
+        AuditActor::System,
+        action,
+        target,
+        "admin-api",
+        AuditResult::Accepted,
+    );
+    store.append_audit(event).await.map_err(store_error)
 }
 
 fn provider_event_id(event: &ProviderEvent) -> &str {
