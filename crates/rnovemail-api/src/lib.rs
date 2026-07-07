@@ -1,3 +1,4 @@
+mod admin_pages;
 mod admin_routes;
 mod mail_routes;
 mod middleware;

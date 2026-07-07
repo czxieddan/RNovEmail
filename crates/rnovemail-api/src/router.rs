@@ -3,7 +3,7 @@ use std::{
     sync::{Arc, RwLock},
 };
 
-use axum::{Json, Router, http::HeaderMap, response::IntoResponse, routing::get};
+use axum::{Json, Router, http::HeaderMap, response::Redirect, routing::get};
 use rnovemail_domain::{
     AuditActor, AuditEvent, AuditResult, DomainName, EmailAddress, Mailbox, ProviderAccount,
     ProviderType, User, UserRole,
@@ -14,7 +14,9 @@ use rnovemail_webhook::SignatureVerifier;
 use secrecy::{ExposeSecret, SecretString};
 use subtle::ConstantTimeEq;
 
-use crate::{admin_routes, mail_routes, middleware::ApiRejection, openapi, webhook_routes};
+use crate::{
+    admin_pages, admin_routes, mail_routes, middleware::ApiRejection, openapi, webhook_routes,
+};
 
 #[derive(Clone)]
 pub struct AppState {
@@ -439,23 +441,19 @@ fn store_error(_error: StoreError) -> ApiRejection {
 
 pub fn build_router(state: AppState) -> Router {
     Router::new()
-        .route("/admin", get(admin_dashboard))
-        .route("/admin/login", get(admin_login))
+        .route("/", get(root_redirect))
         .route("/api/openapi.json", get(openapi_json))
         .route("/healthz", get(healthz))
         .route("/readyz", get(readyz))
+        .merge(admin_pages::routes())
         .merge(admin_routes::routes())
         .merge(mail_routes::routes())
         .merge(webhook_routes::routes())
         .with_state(state)
 }
 
-async fn admin_dashboard() -> impl IntoResponse {
-    rnovemail_admin::dashboard_page()
-}
-
-async fn admin_login() -> impl IntoResponse {
-    rnovemail_admin::login_page()
+async fn root_redirect() -> Redirect {
+    Redirect::to("/admin")
 }
 
 async fn openapi_json() -> Json<utoipa::openapi::OpenApi> {
