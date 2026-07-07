@@ -1,0 +1,15 @@
+target/
+tests/
+local-tests/
+test-data/
+plans/
+artifacts/
+tmp/
+.env
+.env.*
+.git/
+.idea/
+.vscode/
+*.exe
+*.dll
+*.pdb

@@ -1,0 +1,10 @@
+[package]
+name = "rnovemail-admin"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+maud.workspace = true
+thiserror.workspace = true

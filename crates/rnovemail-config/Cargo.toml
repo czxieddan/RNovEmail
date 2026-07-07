@@ -1,0 +1,12 @@
+[package]
+name = "rnovemail-config"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+secrecy.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+url.workspace = true

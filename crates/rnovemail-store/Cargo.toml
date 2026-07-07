@@ -1,0 +1,11 @@
+[package]
+name = "rnovemail-store"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+rnovemail-domain = { path = "../rnovemail-domain" }
+thiserror.workspace = true

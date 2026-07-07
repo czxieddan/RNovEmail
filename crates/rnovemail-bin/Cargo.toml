@@ -1,0 +1,19 @@
+[package]
+name = "rnovemail-bin"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[[bin]]
+name = "rnovemail"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+axum.workspace = true
+rnovemail-api = { path = "../rnovemail-api" }
+rnovemail-config = { path = "../rnovemail-config" }
+rnovemail-observability = { path = "../rnovemail-observability" }
+tokio.workspace = true
+tracing.workspace = true

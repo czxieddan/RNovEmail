@@ -1,0 +1,56 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/rnovemail-admin",
+    "crates/rnovemail-api",
+    "crates/rnovemail-auth",
+    "crates/rnovemail-bin",
+    "crates/rnovemail-config",
+    "crates/rnovemail-domain",
+    "crates/rnovemail-observability",
+    "crates/rnovemail-providers",
+    "crates/rnovemail-quality",
+    "crates/rnovemail-store",
+    "crates/rnovemail-store-rnmdb",
+    "crates/rnovemail-webhook",
+]
+
+[workspace.package]
+edition = "2024"
+license = "AGPL-3.0-only"
+rust-version = "1.95"
+version = "0.1.0"
+
+[workspace.dependencies]
+anyhow = "1"
+argon2 = "0.5"
+async-trait = "0.1"
+axum = { version = "0.8", features = ["json", "macros"] }
+base64 = "0.22"
+chacha20poly1305 = "0.10"
+chrono = { version = "0.4", features = ["serde"] }
+hex = "0.4"
+hmac = "0.12"
+idna = "1"
+maud = { version = "0.27", features = ["axum"] }
+rand = "0.8"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+secrecy = { version = "0.8", features = ["serde"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+thiserror = "2"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["cors", "limit", "request-id", "timeout", "trace"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+url = "2"
+utoipa = { version = "5", features = ["axum_extras", "chrono"] }
+uuid = { version = "1", features = ["serde", "v7"] }
+zeroize = "1"
+
+rnmdb-common = { git = "https://github.com/czxieddan/RNovModularDB.git", rev = "ab1bf5e7fa4f521d6d32364cd217ff1a42b3c3b1", package = "rnmdb-common" }
+rnmdb-instance = { git = "https://github.com/czxieddan/RNovModularDB.git", rev = "ab1bf5e7fa4f521d6d32364cd217ff1a42b3c3b1", package = "rnmdb-instance" }
+rnmdb-security = { git = "https://github.com/czxieddan/RNovModularDB.git", rev = "ab1bf5e7fa4f521d6d32364cd217ff1a42b3c3b1", package = "rnmdb-security" }
+rnmdb-storage = { git = "https://github.com/czxieddan/RNovModularDB.git", rev = "ab1bf5e7fa4f521d6d32364cd217ff1a42b3c3b1", package = "rnmdb-storage" }

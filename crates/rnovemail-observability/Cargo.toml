@@ -1,0 +1,12 @@
+[package]
+name = "rnovemail-observability"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+rnovemail-config = { path = "../rnovemail-config" }
+tower-http.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true

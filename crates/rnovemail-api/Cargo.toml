@@ -1,0 +1,19 @@
+[package]
+name = "rnovemail-api"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+axum.workspace = true
+rnovemail-auth = { path = "../rnovemail-auth" }
+rnovemail-domain = { path = "../rnovemail-domain" }
+rnovemail-providers = { path = "../rnovemail-providers" }
+rnovemail-store = { path = "../rnovemail-store" }
+rnovemail-webhook = { path = "../rnovemail-webhook" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tower-http.workspace = true
+utoipa.workspace = true

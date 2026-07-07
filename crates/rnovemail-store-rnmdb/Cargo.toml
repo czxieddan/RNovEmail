@@ -1,0 +1,17 @@
+[package]
+name = "rnovemail-store-rnmdb"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+rnmdb-common.workspace = true
+rnmdb-instance.workspace = true
+rnmdb-security.workspace = true
+rnmdb-storage.workspace = true
+rnovemail-domain = { path = "../rnovemail-domain" }
+rnovemail-store = { path = "../rnovemail-store" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
