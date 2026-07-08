@@ -293,9 +293,9 @@ struct ResendReceivedEmailResponse {
     reply_to: Vec<String>,
     #[serde(default)]
     subject: Option<String>,
-    #[serde(default)]
+    #[serde(default, alias = "text_body", alias = "textBody")]
     text: Option<String>,
-    #[serde(default)]
+    #[serde(default, alias = "html_body", alias = "htmlBody")]
     html: Option<String>,
     #[serde(default)]
     headers: Option<serde_json::Value>,

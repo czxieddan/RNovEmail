@@ -58,7 +58,7 @@ async fn inbound_message(
         Ok(principal) => principal,
         Err(_) => return Redirect::to(&login_location(&next)).into_response(),
     };
-    match portal_message_data(&state, &principal.subject, &id) {
+    match portal_message_data(&state, &principal.subject, &id).await {
         Ok(data) => rnovemail_admin::portal_message_page(&page_context(&query, &next), &data)
             .into_response(),
         Err(error) => error.into_response(),
@@ -84,7 +84,7 @@ fn portal_data(state: &AppState, email: &str) -> Result<PortalData, ApiRejection
     })
 }
 
-fn portal_message_data(
+async fn portal_message_data(
     state: &AppState,
     email: &str,
     message_id: &str,
@@ -99,6 +99,7 @@ fn portal_message_data(
     let owned_mailboxes = owned_mailbox_lookup(&mailboxes, owner.id());
     let message = state.inbound_message_by_id(message_id)?;
     let mailbox = owned_message_mailbox(&message, &owned_mailboxes)?;
+    let message = state.hydrate_inbound_message_detail(message).await;
     Ok(PortalMessageData {
         email: email.as_str().to_string(),
         message: message_detail_row(message, mailbox),

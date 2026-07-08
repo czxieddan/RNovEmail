@@ -8,7 +8,7 @@ use chrono::Utc;
 use rnovemail_auth::verify_login_secret;
 use rnovemail_domain::{
     AuditActor, AuditEvent, AuditResult, DomainName, EmailAddress, InboundMessage,
-    InboundMessageDetail, Mailbox, MailboxStatus, MessageStatus, MessageTimelineEntry,
+    InboundMessageDetail, Mailbox, MailboxId, MailboxStatus, MessageStatus, MessageTimelineEntry,
     OutboundMessage, ProviderAccount, ProviderAccountId, ProviderType, User, UserRole, UserStatus,
 };
 use rnovemail_providers::{
@@ -226,6 +226,16 @@ impl AppState {
             .get(id)
             .cloned()
             .ok_or(ApiRejection::NotFound)
+    }
+
+    pub(crate) async fn hydrate_inbound_message_detail(
+        &self,
+        message: InboundMessage,
+    ) -> InboundMessage {
+        match self.missing_inbound_detail(&message).await {
+            Ok(Some(detail)) => self.inbound_message_with_detail(message, detail).await,
+            _ => message,
+        }
     }
 
     pub(crate) fn list_audit(&self) -> Result<Vec<AuditEvent>, ApiRejection> {
@@ -683,6 +693,32 @@ impl AppState {
             .map_err(provider_error)
     }
 
+    async fn missing_inbound_detail(
+        &self,
+        message: &InboundMessage,
+    ) -> Result<Option<InboundMessageDetail>, ApiRejection> {
+        if message.detail.is_some() {
+            return Ok(None);
+        }
+        let account = self.provider_for_inbound_message(message)?;
+        self.retrieve_inbound_message_detail(&account, &message.provider_event_id)
+            .await
+            .map(Some)
+    }
+
+    async fn inbound_message_with_detail(
+        &self,
+        mut message: InboundMessage,
+        detail: InboundMessageDetail,
+    ) -> InboundMessage {
+        message.subject = inbound_subject_text(&message.subject, Some(&detail));
+        message.text = inbound_body_text(&message.text, Some(&detail));
+        message.detail = Some(detail);
+        let _ = self.persist_inbound_message(&message).await;
+        let _ = self.insert_inbound_message(message.clone());
+        message
+    }
+
     async fn persist_inbound_message(&self, message: &InboundMessage) -> Result<(), ApiRejection> {
         if let Some(store) = self.store() {
             store
@@ -763,6 +799,29 @@ impl AppState {
             .ok_or(ApiRejection::NotFound)
     }
 
+    fn provider_for_inbound_message(
+        &self,
+        message: &InboundMessage,
+    ) -> Result<ProviderAccount, ApiRejection> {
+        match message.provider_account_id {
+            Some(id) => self.provider_by_id(&serialized_key(&id)),
+            None => self.provider_for_mailbox_id(message.mailbox_id),
+        }
+    }
+
+    fn provider_for_mailbox_id(
+        &self,
+        mailbox_id: MailboxId,
+    ) -> Result<ProviderAccount, ApiRejection> {
+        let mailbox = self.mailbox_by_id(mailbox_id)?;
+        let data = self.read_data()?;
+        data.providers
+            .iter()
+            .find(|provider| provider.serves_domain(mailbox.address().domain()))
+            .cloned()
+            .ok_or(ApiRejection::NoProviderForDomain)
+    }
+
     fn replace_provider(
         &self,
         provider: ProviderAccount,
@@ -823,6 +882,15 @@ impl AppState {
         let data = self.read_data()?;
         data.mailboxes
             .get(email.as_str())
+            .cloned()
+            .ok_or(ApiRejection::NotFound)
+    }
+
+    fn mailbox_by_id(&self, id: MailboxId) -> Result<Mailbox, ApiRejection> {
+        let data = self.read_data()?;
+        data.mailboxes
+            .values()
+            .find(|mailbox| mailbox.id() == id)
             .cloned()
             .ok_or(ApiRejection::NotFound)
     }
