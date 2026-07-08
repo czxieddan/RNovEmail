@@ -39,6 +39,8 @@ pub trait ProviderRepository: Send + Sync {
 pub trait MessageRepository: Send + Sync {
     async fn put_outbound(&self, message: OutboundMessage) -> Result<(), StoreError>;
     async fn put_inbound(&self, message: InboundMessage) -> Result<(), StoreError>;
+    async fn list_outbound(&self) -> Result<Vec<OutboundMessage>, StoreError>;
+    async fn list_inbound(&self) -> Result<Vec<InboundMessage>, StoreError>;
 }
 
 #[async_trait]

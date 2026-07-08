@@ -4,9 +4,11 @@ use std::{
 };
 
 use axum::{Json, Router, http::HeaderMap, response::Redirect, routing::get};
+use chrono::Utc;
 use rnovemail_auth::verify_login_secret;
 use rnovemail_domain::{
-    AuditActor, AuditEvent, AuditResult, DomainName, EmailAddress, Mailbox, ProviderAccount,
+    AuditActor, AuditEvent, AuditResult, DomainName, EmailAddress, InboundMessage, Mailbox,
+    MailboxStatus, MessageStatus, MessageTimelineEntry, OutboundMessage, ProviderAccount,
     ProviderType, User, UserRole, UserStatus,
 };
 use rnovemail_providers::{
@@ -47,6 +49,8 @@ struct AppData {
     domains: HashSet<DomainName>,
     providers: Vec<ProviderAccount>,
     mailboxes: HashMap<String, Mailbox>,
+    outbound_messages: HashMap<String, OutboundMessage>,
+    inbound_messages: HashMap<String, InboundMessage>,
     webhook_bindings: HashMap<String, WebhookBinding>,
     webhook_events: HashSet<String>,
     audit_events: Vec<AuditEvent>,
@@ -194,6 +198,16 @@ impl AppState {
     pub(crate) fn list_mailboxes(&self) -> Result<Vec<Mailbox>, ApiRejection> {
         let data = self.read_data()?;
         Ok(data.mailboxes.values().cloned().collect())
+    }
+
+    pub(crate) fn list_outbound_messages(&self) -> Result<Vec<OutboundMessage>, ApiRejection> {
+        let data = self.read_data()?;
+        Ok(data.outbound_messages.values().cloned().collect())
+    }
+
+    pub(crate) fn list_inbound_messages(&self) -> Result<Vec<InboundMessage>, ApiRejection> {
+        let data = self.read_data()?;
+        Ok(data.inbound_messages.values().cloned().collect())
     }
 
     pub(crate) fn list_audit(&self) -> Result<Vec<AuditEvent>, ApiRejection> {
@@ -370,10 +384,54 @@ impl AppState {
         request: SendMailRequest,
     ) -> Result<(ProviderAccount, ProviderSendReceipt), ApiRejection> {
         let provider = self.provider_for_sender(request.from())?;
+        let snapshot = request.clone();
         let receipt = self.deliver_with_provider(&provider, request).await?;
+        self.record_outbound_message(&provider, &snapshot, &receipt)
+            .await?;
         self.record_audit("mail.outbound.send", &provider_key(&provider))
             .await?;
         Ok((provider, receipt))
+    }
+
+    pub(crate) async fn send_user_mail(
+        &self,
+        user_email: &str,
+        request: SendMailRequest,
+    ) -> Result<(ProviderAccount, ProviderSendReceipt), ApiRejection> {
+        let email = EmailAddress::parse(user_email).map_err(|_| ApiRejection::BadRequest)?;
+        self.ensure_user_can_send(&email, request.from())?;
+        self.send_mail(request).await
+    }
+
+    async fn record_outbound_message(
+        &self,
+        provider: &ProviderAccount,
+        request: &SendMailRequest,
+        receipt: &ProviderSendReceipt,
+    ) -> Result<(), ApiRejection> {
+        let message = outbound_message(provider, request, receipt);
+        self.persist_outbound_message(&message).await?;
+        self.insert_outbound_message(message)
+    }
+
+    async fn persist_outbound_message(
+        &self,
+        message: &OutboundMessage,
+    ) -> Result<(), ApiRejection> {
+        if let Some(store) = self.store() {
+            store
+                .put_outbound(message.clone())
+                .await
+                .map_err(store_error)?;
+        }
+        Ok(())
+    }
+
+    fn insert_outbound_message(&self, message: OutboundMessage) -> Result<(), ApiRejection> {
+        let mut data = self.write_data()?;
+        data.outbound_messages
+            .insert(serialized_key(&message.id), message);
+        Ok(())
     }
 
     pub(crate) async fn add_mailbox(
@@ -424,10 +482,12 @@ impl AppState {
         account_id: &str,
         request: ProviderWebhookRequest,
     ) -> Result<(), ApiRejection> {
+        let account = self.provider_by_id(account_id)?;
         let binding = self.webhook_binding(account_id)?;
         ensure_provider_matches(provider, binding.provider_type)?;
         let events = verify_webhook(binding, request)?;
-        self.remember_webhook_events(provider, events).await
+        self.remember_webhook_events(provider, &account, events)
+            .await
     }
 
     fn new(admin_token: Option<String>) -> Self {
@@ -477,12 +537,107 @@ impl AppState {
     async fn remember_webhook_events(
         &self,
         provider: &str,
+        account: &ProviderAccount,
         events: Vec<ProviderEvent>,
     ) -> Result<(), ApiRejection> {
         for event in events {
-            self.remember_webhook_event(provider, provider_event_id(&event))
+            self.remember_provider_event(provider, account, event)
                 .await?;
         }
+        Ok(())
+    }
+
+    async fn remember_provider_event(
+        &self,
+        provider: &str,
+        account: &ProviderAccount,
+        event: ProviderEvent,
+    ) -> Result<(), ApiRejection> {
+        let event_id = provider_event_id(&event).to_string();
+        self.remember_webhook_event(provider, &event_id).await?;
+        self.apply_provider_event(account, event).await
+    }
+
+    async fn apply_provider_event(
+        &self,
+        account: &ProviderAccount,
+        event: ProviderEvent,
+    ) -> Result<(), ApiRejection> {
+        match event {
+            ProviderEvent::Inbound {
+                provider_event_id,
+                from,
+                to,
+                subject,
+                text,
+            } => {
+                self.record_inbound_messages(provider_event_id, from, to, subject, text)
+                    .await
+            }
+            ProviderEvent::Delivered { .. }
+            | ProviderEvent::Bounced { .. }
+            | ProviderEvent::Complained { .. } => self.record_delivery_event(account).await,
+        }
+    }
+
+    async fn record_delivery_event(&self, _account: &ProviderAccount) -> Result<(), ApiRejection> {
+        Ok(())
+    }
+
+    async fn record_inbound_messages(
+        &self,
+        provider_event_id: String,
+        from: EmailAddress,
+        to: Vec<EmailAddress>,
+        subject: String,
+        text: String,
+    ) -> Result<(), ApiRejection> {
+        for recipient in to {
+            self.record_inbound_for_recipient(
+                &provider_event_id,
+                &from,
+                &recipient,
+                &subject,
+                &text,
+            )
+            .await?;
+        }
+        Ok(())
+    }
+
+    async fn record_inbound_for_recipient(
+        &self,
+        provider_event_id: &str,
+        from: &EmailAddress,
+        recipient: &EmailAddress,
+        subject: &str,
+        text: &str,
+    ) -> Result<(), ApiRejection> {
+        let Some(mailbox) = self.optional_mailbox_by_email(recipient)? else {
+            return Ok(());
+        };
+        if !is_inbound_mailbox(&mailbox) {
+            return Ok(());
+        }
+        let message = inbound_message(provider_event_id, from, &mailbox, subject, text);
+        self.persist_inbound_message(&message).await?;
+        self.insert_inbound_message(message)
+    }
+
+    async fn persist_inbound_message(&self, message: &InboundMessage) -> Result<(), ApiRejection> {
+        if let Some(store) = self.store() {
+            store
+                .put_inbound(message.clone())
+                .await
+                .map_err(store_error)?;
+        }
+        Ok(())
+    }
+
+    fn insert_inbound_message(&self, message: InboundMessage) -> Result<(), ApiRejection> {
+        let mut data = self.write_data()?;
+        data.inbound_messages
+            .insert(serialized_key(&message.id), message);
         Ok(())
     }
 
@@ -611,6 +766,26 @@ impl AppState {
             .get(email.as_str())
             .cloned()
             .ok_or(ApiRejection::NotFound)
+    }
+
+    fn optional_mailbox_by_email(
+        &self,
+        email: &EmailAddress,
+    ) -> Result<Option<Mailbox>, ApiRejection> {
+        let data = self.read_data()?;
+        Ok(data.mailboxes.get(email.as_str()).cloned())
+    }
+
+    fn ensure_user_can_send(
+        &self,
+        user_email: &EmailAddress,
+        from: &EmailAddress,
+    ) -> Result<(), ApiRejection> {
+        let user = self.user_by_email(user_email)?;
+        ensure_active_user(&user)?;
+        let mailbox = self.mailbox_by_email(from)?;
+        ensure_owned_mailbox(&mailbox, user.id())?;
+        ensure_outbound_mailbox(&mailbox)
     }
 
     fn insert_mailbox(&self, mailbox: Mailbox) -> Result<(), ApiRejection> {
@@ -853,7 +1028,9 @@ fn provider_event_id(event: &ProviderEvent) -> &str {
         ProviderEvent::Delivered { provider_event_id }
         | ProviderEvent::Bounced { provider_event_id }
         | ProviderEvent::Complained { provider_event_id }
-        | ProviderEvent::Inbound { provider_event_id } => provider_event_id,
+        | ProviderEvent::Inbound {
+            provider_event_id, ..
+        } => provider_event_id,
     }
 }
 
@@ -872,6 +1049,8 @@ async fn load_app_data(store: &dyn AppStore) -> Result<AppData, StoreError> {
     let domains = store.list_domains().await?;
     let providers = store.list_providers().await?;
     let mailboxes = store.list_mailboxes().await?;
+    let outbound_messages = store.list_outbound().await?;
+    let inbound_messages = store.list_inbound().await?;
     let audit_events = store.list_audit().await?;
     let webhook_bindings = webhook_bindings(&providers)?;
     Ok(AppData {
@@ -879,6 +1058,8 @@ async fn load_app_data(store: &dyn AppStore) -> Result<AppData, StoreError> {
         domains: domains.into_iter().collect(),
         providers,
         mailboxes: keyed_mailboxes(mailboxes),
+        outbound_messages: keyed_outbound_messages(outbound_messages),
+        inbound_messages: keyed_inbound_messages(inbound_messages),
         webhook_bindings,
         webhook_events: HashSet::new(),
         audit_events,
@@ -917,6 +1098,20 @@ fn keyed_mailboxes(mailboxes: Vec<Mailbox>) -> HashMap<String, Mailbox> {
     mailboxes
         .into_iter()
         .map(|mailbox| (mailbox.address().as_str().to_string(), mailbox))
+        .collect()
+}
+
+fn keyed_outbound_messages(messages: Vec<OutboundMessage>) -> HashMap<String, OutboundMessage> {
+    messages
+        .into_iter()
+        .map(|message| (serialized_key(&message.id), message))
+        .collect()
+}
+
+fn keyed_inbound_messages(messages: Vec<InboundMessage>) -> HashMap<String, InboundMessage> {
+    messages
+        .into_iter()
+        .map(|message| (serialized_key(&message.id), message))
         .collect()
 }
 
@@ -1031,5 +1226,72 @@ fn ensure_active_user(user: &User) -> Result<(), ApiRejection> {
     match user.status() {
         UserStatus::Active => Ok(()),
         UserStatus::Disabled => Err(ApiRejection::InvalidApiToken),
+    }
+}
+
+fn ensure_owned_mailbox(
+    mailbox: &Mailbox,
+    owner_id: rnovemail_domain::UserId,
+) -> Result<(), ApiRejection> {
+    match mailbox.owner_id() == owner_id {
+        true => Ok(()),
+        false => Err(ApiRejection::MailboxAccessDenied),
+    }
+}
+
+fn ensure_outbound_mailbox(mailbox: &Mailbox) -> Result<(), ApiRejection> {
+    match mailbox.status() == MailboxStatus::Active && mailbox.outbound_enabled() {
+        true => Ok(()),
+        false => Err(ApiRejection::MailboxAccessDenied),
+    }
+}
+
+fn is_inbound_mailbox(mailbox: &Mailbox) -> bool {
+    mailbox.status() == MailboxStatus::Active && mailbox.inbound_enabled()
+}
+
+fn outbound_message(
+    provider: &ProviderAccount,
+    request: &SendMailRequest,
+    receipt: &ProviderSendReceipt,
+) -> OutboundMessage {
+    OutboundMessage {
+        id: receipt.message_id,
+        provider_account_id: provider.id(),
+        from: request.from().clone(),
+        to: request.to().to_vec(),
+        subject: request.subject().to_string(),
+        text: request.text().to_string(),
+        status: MessageStatus::Sent,
+        timeline: vec![timeline_entry(
+            MessageStatus::Sent,
+            &receipt.provider_message_id,
+        )],
+    }
+}
+
+fn inbound_message(
+    provider_event_id: &str,
+    from: &EmailAddress,
+    mailbox: &Mailbox,
+    subject: &str,
+    text: &str,
+) -> InboundMessage {
+    InboundMessage {
+        id: rnovemail_domain::MessageId::new(),
+        mailbox_id: mailbox.id(),
+        provider_event_id: provider_event_id.to_string(),
+        from: from.clone(),
+        subject: subject.to_string(),
+        text: text.to_string(),
+        received_at: Utc::now(),
+    }
+}
+
+fn timeline_entry(status: MessageStatus, note: &str) -> MessageTimelineEntry {
+    MessageTimelineEntry {
+        status,
+        at: Utc::now(),
+        note: note.to_string(),
     }
 }

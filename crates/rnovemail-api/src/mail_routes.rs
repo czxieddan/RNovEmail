@@ -14,6 +14,7 @@ use crate::{AppState, middleware::ApiRejection};
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/api/v1/mail/send", post(send_mail))
+        .route("/api/v1/portal/mail/send", post(send_portal_mail))
         .route("/api/v1/mail/outbound/{id}", get(get_outbound))
         .route("/api/v1/mail/inbound/{id}", get(get_inbound))
 }
@@ -27,6 +28,20 @@ async fn send_mail(
         return rejection.into_response();
     }
     send_mail_response(&state, request).await.into_response()
+}
+
+async fn send_portal_mail(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<SendMailApiRequest>,
+) -> Response {
+    let principal = match state.user_principal(&headers) {
+        Ok(principal) => principal,
+        Err(rejection) => return rejection.into_response(),
+    };
+    send_user_mail_response(&state, &principal.subject, request)
+        .await
+        .into_response()
 }
 
 async fn get_outbound(State(state): State<AppState>, headers: HeaderMap) -> Response {
@@ -50,6 +65,16 @@ async fn send_mail_response(
 ) -> Result<Json<SendMailResponse>, ApiRejection> {
     let mail = request.try_into_mail_request()?;
     let (provider, receipt) = state.send_mail(mail).await?;
+    Ok(Json(SendMailResponse::sent(provider, receipt)))
+}
+
+async fn send_user_mail_response(
+    state: &AppState,
+    user_email: &str,
+    request: SendMailApiRequest,
+) -> Result<Json<SendMailResponse>, ApiRejection> {
+    let mail = request.try_into_mail_request()?;
+    let (provider, receipt) = state.send_user_mail(user_email, mail).await?;
     Ok(Json(SendMailResponse::sent(provider, receipt)))
 }
 

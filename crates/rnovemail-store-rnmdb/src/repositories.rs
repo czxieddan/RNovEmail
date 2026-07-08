@@ -259,6 +259,14 @@ impl MessageRepository for RnovStore {
             &message,
         )
     }
+
+    async fn list_outbound(&self) -> Result<Vec<OutboundMessage>, StoreError> {
+        list_typed(self, "outbound_messages_by_id")
+    }
+
+    async fn list_inbound(&self) -> Result<Vec<InboundMessage>, StoreError> {
+        list_typed(self, "inbound_messages_by_id")
+    }
 }
 
 #[async_trait]

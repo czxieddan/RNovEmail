@@ -77,4 +77,17 @@ pub struct AuditRow {
 pub struct PortalData {
     pub email: String,
     pub mailboxes: Vec<MailboxRow>,
+    pub inbox: Vec<MessageRow>,
+    pub sent: Vec<MessageRow>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MessageRow {
+    pub mailbox: String,
+    pub from: String,
+    pub to: String,
+    pub subject: String,
+    pub text: String,
+    pub status: String,
+    pub at: String,
 }

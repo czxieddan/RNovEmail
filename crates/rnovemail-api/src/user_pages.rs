@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use axum::{
     Router,
@@ -7,8 +7,10 @@ use axum::{
     response::{IntoResponse, Redirect, Response},
     routing::get,
 };
-use rnovemail_admin::{Lang, MailboxRow, PageContext, PortalData, Theme};
-use rnovemail_domain::{EmailAddress, Mailbox, User, UserId};
+use rnovemail_admin::{Lang, MailboxRow, MessageRow, PageContext, PortalData, Theme};
+use rnovemail_domain::{
+    EmailAddress, InboundMessage, Mailbox, MailboxId, OutboundMessage, User, UserId,
+};
 use serde::Deserialize;
 
 use crate::{AppState, middleware::ApiRejection};
@@ -46,9 +48,14 @@ fn portal_data(state: &AppState, email: &str) -> Result<PortalData, ApiRejection
         .iter()
         .find(|user| user.primary_email() == &email)
         .ok_or(ApiRejection::NotFound)?;
+    let mailboxes = state.list_mailboxes()?;
+    let owned_mailboxes = owned_mailbox_lookup(&mailboxes, owner.id());
+    let owned_addresses = owned_address_lookup(&mailboxes, owner.id());
     Ok(PortalData {
         email: email.as_str().to_string(),
-        mailboxes: mailbox_rows(state.list_mailboxes()?, owner.id(), &owners),
+        mailboxes: mailbox_rows(mailboxes, owner.id(), &owners),
+        inbox: inbound_rows(state.list_inbound_messages()?, &owned_mailboxes),
+        sent: outbound_rows(state.list_outbound_messages()?, &owned_addresses),
     })
 }
 
@@ -70,6 +77,76 @@ fn mailbox_rows(
             inbound_enabled: mailbox.inbound_enabled(),
             outbound_enabled: mailbox.outbound_enabled(),
         })
+        .collect()
+}
+
+fn inbound_rows(
+    messages: Vec<InboundMessage>,
+    mailboxes: &HashMap<MailboxId, String>,
+) -> Vec<MessageRow> {
+    messages
+        .into_iter()
+        .filter_map(|message| inbound_row(message, mailboxes))
+        .collect()
+}
+
+fn inbound_row(
+    message: InboundMessage,
+    mailboxes: &HashMap<MailboxId, String>,
+) -> Option<MessageRow> {
+    Some(MessageRow {
+        mailbox: mailboxes.get(&message.mailbox_id)?.clone(),
+        from: message.from.as_str().to_string(),
+        to: String::new(),
+        subject: message.subject,
+        text: message.text,
+        status: "Received".to_string(),
+        at: message.received_at.to_rfc3339(),
+    })
+}
+
+fn outbound_rows(messages: Vec<OutboundMessage>, addresses: &HashSet<String>) -> Vec<MessageRow> {
+    messages
+        .into_iter()
+        .filter(|message| addresses.contains(message.from.as_str()))
+        .map(outbound_row)
+        .collect()
+}
+
+fn outbound_row(message: OutboundMessage) -> MessageRow {
+    MessageRow {
+        mailbox: message.from.as_str().to_string(),
+        from: message.from.as_str().to_string(),
+        to: message
+            .to
+            .iter()
+            .map(|email| email.as_str())
+            .collect::<Vec<_>>()
+            .join(", "),
+        subject: message.subject,
+        text: message.text,
+        status: format!("{:?}", message.status),
+        at: message
+            .timeline
+            .last()
+            .map(|entry| entry.at.to_rfc3339())
+            .unwrap_or_default(),
+    }
+}
+
+fn owned_mailbox_lookup(mailboxes: &[Mailbox], owner_id: UserId) -> HashMap<MailboxId, String> {
+    mailboxes
+        .iter()
+        .filter(|mailbox| mailbox.owner_id() == owner_id)
+        .map(|mailbox| (mailbox.id(), mailbox.address().as_str().to_string()))
+        .collect()
+}
+
+fn owned_address_lookup(mailboxes: &[Mailbox], owner_id: UserId) -> HashSet<String> {
+    mailboxes
+        .iter()
+        .filter(|mailbox| mailbox.owner_id() == owner_id)
+        .map(|mailbox| mailbox.address().as_str().to_string())
         .collect()
 }
 

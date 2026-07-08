@@ -9,6 +9,7 @@ use utoipa::OpenApi;
     create_provider_doc,
     create_mailbox_doc,
     send_mail_doc,
+    send_portal_mail_doc,
     get_outbound_doc,
     get_inbound_doc,
     ingest_webhook_doc
@@ -46,6 +47,10 @@ fn create_mailbox_doc() {}
 #[allow(dead_code)]
 #[utoipa::path(post, path = "/api/v1/mail/send", responses((status = 200, description = "send queued")))]
 fn send_mail_doc() {}
+
+#[allow(dead_code)]
+#[utoipa::path(post, path = "/api/v1/portal/mail/send", responses((status = 200, description = "user mail sent")))]
+fn send_portal_mail_doc() {}
 
 #[allow(dead_code)]
 #[utoipa::path(get, path = "/api/v1/mail/outbound/{id}", responses((status = 200, description = "outbound message")))]

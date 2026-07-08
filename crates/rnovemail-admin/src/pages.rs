@@ -143,7 +143,8 @@ label {
   gap: 6px;
 }
 input,
-select {
+select,
+textarea {
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -154,10 +155,15 @@ select {
   width: 100%;
 }
 input:focus,
-select:focus {
+select:focus,
+textarea:focus {
   border-color: var(--blue);
   box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.16);
   outline: none;
+}
+textarea {
+  min-height: 112px;
+  resize: vertical;
 }
 button,
 .button {
@@ -310,7 +316,7 @@ function formPayload(form) {
   new FormData(form).forEach((value, key) => {
     const text = String(value).trim();
     if (!text) return;
-    if (key === "domains" || key === "roles") payload[key] = splitList(text);
+    if (key === "domains" || key === "roles" || key === "to") payload[key] = splitList(text);
     else if (key === "enabled" || key.endsWith("_enabled")) payload[key] = text === "true";
     else payload[key] = text;
   });
@@ -368,6 +374,7 @@ pub fn portal_page(ctx: &PageContext, data: &PortalData) -> Markup {
         text(ctx.lang, Text::Portal),
         false,
         html! {
+            (compose_form(ctx, data))
             section class="panel accent" {
                 h2 { (data.email) }
                 div class="table-wrap" {
@@ -393,8 +400,83 @@ pub fn portal_page(ctx: &PageContext, data: &PortalData) -> Markup {
                     }
                 }
             }
+            (message_table(ctx, Text::Inbox, &data.inbox, true))
+            (message_table(ctx, Text::Sent, &data.sent, false))
         },
     )
+}
+
+fn compose_form(ctx: &PageContext, data: &PortalData) -> Markup {
+    html! {
+        section class="panel accent" {
+            h2 { (text(ctx.lang, Text::Compose)) }
+            form class="form-grid" data-api-form="" data-reload="true" data-endpoint="/api/v1/portal/mail/send" {
+                label {
+                    (text(ctx.lang, Text::From))
+                    select name="from" {
+                        @for mailbox in &data.mailboxes {
+                            option value=(&mailbox.email) { (&mailbox.email) }
+                        }
+                    }
+                }
+                (field(ctx, Text::To, "to", "text", ""))
+                (field(ctx, Text::Subject, "subject", "text", ""))
+                label class="span-2" {
+                    (text(ctx.lang, Text::Body))
+                    textarea name="text" required {}
+                }
+                (submit_row(ctx, Text::Send))
+            }
+        }
+    }
+}
+
+fn message_table(
+    ctx: &PageContext,
+    title: Text,
+    messages: &[crate::MessageRow],
+    inbound: bool,
+) -> Markup {
+    html! {
+        section class="panel" {
+            h2 { (text(ctx.lang, title)) }
+            div class="table-wrap" {
+                table class="table" {
+                    thead {
+                        tr {
+                            th { (text(ctx.lang, Text::Email)) }
+                            th { (if inbound { text(ctx.lang, Text::From) } else { text(ctx.lang, Text::To) }) }
+                            th { (text(ctx.lang, Text::Subject)) }
+                            th { (text(ctx.lang, Text::Status)) }
+                        }
+                    }
+                    tbody {
+                        @for message in messages {
+                            tr {
+                                td { (&message.mailbox) }
+                                td {
+                                    @if inbound { (&message.from) } @else { (&message.to) }
+                                }
+                                td {
+                                    strong { (&message.subject) }
+                                    p { (&message.text) }
+                                }
+                                td { (message_status_text(ctx, &message.status)) }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn message_status_text<'a>(ctx: &PageContext, status: &'a str) -> &'a str {
+    match status {
+        "Received" => text(ctx.lang, Text::Received),
+        "Sent" => text(ctx.lang, Text::Sent),
+        _ => status,
+    }
 }
 
 pub fn admin_page(ctx: &PageContext, section: AdminSection, data: &AdminData) -> Markup {
@@ -612,9 +694,20 @@ fn mailboxes(ctx: &PageContext, data: &AdminData) -> Markup {
             h2 { (text(ctx.lang, Text::Mailboxes)) }
             div class="table-wrap" {
                 table class="table" {
+                    thead {
+                        tr {
+                            th { (text(ctx.lang, Text::Email)) }
+                            th { (text(ctx.lang, Text::Users)) }
+                            th { (text(ctx.lang, Text::Status)) }
+                        }
+                    }
                     tbody {
                         @for mailbox in &data.mailboxes {
-                            tr { td { (mailbox_update_form(ctx, mailbox)) } }
+                            tr {
+                                td { (&mailbox.email) }
+                                td { (&mailbox.owner) }
+                                td { (mailbox_update_form(ctx, mailbox)) }
+                            }
                         }
                     }
                 }

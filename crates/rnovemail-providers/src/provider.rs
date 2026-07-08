@@ -129,8 +129,20 @@ pub struct VerifiedWebhook {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum ProviderEvent {
-    Delivered { provider_event_id: String },
-    Bounced { provider_event_id: String },
-    Complained { provider_event_id: String },
-    Inbound { provider_event_id: String },
+    Delivered {
+        provider_event_id: String,
+    },
+    Bounced {
+        provider_event_id: String,
+    },
+    Complained {
+        provider_event_id: String,
+    },
+    Inbound {
+        provider_event_id: String,
+        from: EmailAddress,
+        to: Vec<EmailAddress>,
+        subject: String,
+        text: String,
+    },
 }

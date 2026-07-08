@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use reqwest::Client;
-use rnovemail_domain::{MessageId, ProviderType};
+use rnovemail_domain::{EmailAddress, MessageId, ProviderType};
 use rnovemail_webhook::SignatureVerifier;
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
@@ -168,7 +168,7 @@ fn map_resend_event(
         "email.delivered" => Ok(ProviderEvent::Delivered { provider_event_id }),
         "email.bounced" => Ok(ProviderEvent::Bounced { provider_event_id }),
         "email.complained" => Ok(ProviderEvent::Complained { provider_event_id }),
-        "email.received" => Ok(ProviderEvent::Inbound { provider_event_id }),
+        "email.received" => inbound_event(value, provider_event_id),
         _ => Err(ProviderError::InvalidPayload),
     }
 }
@@ -178,4 +178,74 @@ fn event_type(value: &serde_json::Value) -> Result<&str, ProviderError> {
         .get("type")
         .and_then(|kind| kind.as_str())
         .ok_or(ProviderError::InvalidPayload)
+}
+
+fn inbound_event(
+    value: &serde_json::Value,
+    provider_event_id: String,
+) -> Result<ProviderEvent, ProviderError> {
+    Ok(ProviderEvent::Inbound {
+        provider_event_id,
+        from: inbound_from(value)?,
+        to: inbound_to(value)?,
+        subject: inbound_subject(value).to_string(),
+        text: inbound_text(value).to_string(),
+    })
+}
+
+fn inbound_from(value: &serde_json::Value) -> Result<EmailAddress, ProviderError> {
+    parse_address(
+        value
+            .pointer("/data/from")
+            .and_then(address_value)
+            .ok_or(ProviderError::InvalidPayload)?,
+    )
+}
+
+fn inbound_to(value: &serde_json::Value) -> Result<Vec<EmailAddress>, ProviderError> {
+    let recipients = value
+        .pointer("/data/to")
+        .and_then(|value| value.as_array())
+        .ok_or(ProviderError::InvalidPayload)?;
+    let parsed = recipients
+        .iter()
+        .filter_map(address_value)
+        .map(parse_address)
+        .collect::<Result<Vec<_>, _>>()?;
+    reject_empty_inbound_recipients(parsed)
+}
+
+fn address_value(value: &serde_json::Value) -> Option<&str> {
+    value
+        .as_str()
+        .or_else(|| value.get("email").and_then(|email| email.as_str()))
+}
+
+fn parse_address(value: &str) -> Result<EmailAddress, ProviderError> {
+    EmailAddress::parse(value).map_err(|_| ProviderError::InvalidPayload)
+}
+
+fn reject_empty_inbound_recipients(
+    recipients: Vec<EmailAddress>,
+) -> Result<Vec<EmailAddress>, ProviderError> {
+    match recipients.is_empty() {
+        true => Err(ProviderError::InvalidPayload),
+        false => Ok(recipients),
+    }
+}
+
+fn inbound_subject(value: &serde_json::Value) -> &str {
+    value
+        .pointer("/data/subject")
+        .and_then(|subject| subject.as_str())
+        .unwrap_or("")
+}
+
+fn inbound_text(value: &serde_json::Value) -> &str {
+    value
+        .pointer("/data/text")
+        .or_else(|| value.pointer("/data/text_body"))
+        .or_else(|| value.pointer("/data/html"))
+        .and_then(|text| text.as_str())
+        .unwrap_or("")
 }
