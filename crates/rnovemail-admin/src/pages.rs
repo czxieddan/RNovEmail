@@ -243,6 +243,10 @@ button.secondary {
   gap: 8px;
   grid-template-columns: minmax(120px, 1fr) minmax(120px, 1fr) auto;
 }
+.row-actions {
+  display: grid;
+  gap: 8px;
+}
 @media (max-width: 900px) {
   .shell { grid-template-columns: 1fr; }
   .side { border-bottom: 1px solid var(--line); border-right: 0; }
@@ -265,15 +269,22 @@ document.querySelectorAll("[data-api-form]").forEach((form) => {
     status.dataset.state = "";
 
     try {
+      const method = form.dataset.method || "POST";
+      const request = {
+        method,
+        credentials: "same-origin"
+      };
+      if (method !== "DELETE") {
+        request.headers = { "content-type": "application/json" };
+        request.body = JSON.stringify(formPayload(form));
+      }
       const response = await fetch(form.dataset.endpoint, {
-        method: form.dataset.method || "POST",
-        credentials: "same-origin",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(formPayload(form))
+        ...request
       });
       const text = await response.text();
       status.textContent = response.ok ? "Saved" : text || response.statusText;
       status.dataset.state = response.ok ? "ok" : "error";
+      if (response.ok && form.dataset.reload === "true") location.reload();
       if (response.ok && form.dataset.reset !== "false") form.reset();
     } catch (error) {
       status.textContent = "Request failed";
@@ -432,7 +443,7 @@ fn create_user_form(ctx: &PageContext) -> Markup {
     html! {
         section class="panel accent" {
             h2 { (text(ctx.lang, Text::Add)) " " (text(ctx.lang, Text::Users)) }
-            form class="form-grid" data-api-form="" data-endpoint="/api/v1/admin/users" {
+            form class="form-grid" data-api-form="" data-reload="true" data-endpoint="/api/v1/admin/users" {
                 (field(ctx, Text::Name, "display_name", "text", ""))
                 (field(ctx, Text::Email, "email", "email", ""))
                 (field(ctx, Text::Roles, "roles", "text", "MailUser"))
@@ -463,7 +474,7 @@ fn domains(ctx: &PageContext, data: &AdminData) -> Markup {
     html! {
         section class="panel accent" {
             h2 { (text(ctx.lang, Text::Add)) " " (text(ctx.lang, Text::Domains)) }
-            form class="form-grid" data-api-form="" data-endpoint="/api/v1/admin/domains" {
+            form class="form-grid" data-api-form="" data-reload="true" data-endpoint="/api/v1/admin/domains" {
                 (field(ctx, Text::Domains, "domain", "text", ""))
                 (submit_row(ctx, Text::Create))
             }
@@ -474,11 +485,24 @@ fn domains(ctx: &PageContext, data: &AdminData) -> Markup {
                 table class="table" {
                     tbody {
                         @for domain in &data.domains {
-                            tr { td { (&domain.domain) } }
+                            tr { td { (domain_update_form(ctx, domain)) } }
                         }
                     }
                 }
             }
+        }
+    }
+}
+
+fn domain_update_form(ctx: &PageContext, domain: &crate::DomainRow) -> Markup {
+    html! {
+        div class="row-actions" {
+            form class="row-form" data-api-form="" data-reset="false" data-reload="true" data-method="PATCH" data-endpoint=(format!("/api/v1/admin/domains/{}", domain.domain)) {
+                input name="domain" value=(&domain.domain);
+                button type="submit" { (text(ctx.lang, Text::Save)) }
+                p class="status" data-form-status="" {}
+            }
+            (delete_form(ctx, &format!("/api/v1/admin/domains/{}", domain.domain)))
         }
     }
 }
@@ -505,10 +529,11 @@ fn create_provider_form(ctx: &PageContext) -> Markup {
     html! {
         section class="panel accent" {
             h2 { (text(ctx.lang, Text::Add)) " " (text(ctx.lang, Text::Providers)) }
-            form class="form-grid" data-api-form="" data-endpoint="/api/v1/admin/provider-accounts" {
+            form class="form-grid" data-api-form="" data-reload="true" data-endpoint="/api/v1/admin/provider-accounts" {
                 (field(ctx, Text::Name, "name", "text", ""))
                 label { (text(ctx.lang, Text::Providers)) select name="provider_type" { option value="resend" { "Resend" } } }
                 (field(ctx, Text::Domains, "domains", "text", ""))
+                (field(ctx, Text::ApiKey, "api_key", "password", ""))
                 (field(ctx, Text::WebhookSecret, "webhook_secret", "password", ""))
                 (submit_row(ctx, Text::Create))
             }
@@ -518,15 +543,28 @@ fn create_provider_form(ctx: &PageContext) -> Markup {
 
 fn provider_update_form(ctx: &PageContext, provider: &crate::ProviderRow) -> Markup {
     html! {
-        form class="row-form" data-api-form="" data-reset="false" data-method="PATCH" data-endpoint=(format!("/api/v1/admin/provider-accounts/{}", provider.id)) {
-            input name="name" value=(&provider.name);
-            input name="domains" value=(&provider.domains);
-            select name="enabled" {
-                option value="true" selected[provider.enabled] { (text(ctx.lang, Text::Enabled)) }
-                option value="false" selected[!provider.enabled] { (text(ctx.lang, Text::Disabled)) }
+        div class="row-actions" {
+            form class="row-form" data-api-form="" data-reset="false" data-reload="true" data-method="PATCH" data-endpoint=(format!("/api/v1/admin/provider-accounts/{}", provider.id)) {
+                input name="name" value=(&provider.name);
+                input name="domains" value=(&provider.domains);
+                select name="enabled" {
+                    option value="true" selected[provider.enabled] { (text(ctx.lang, Text::Enabled)) }
+                    option value="false" selected[!provider.enabled] { (text(ctx.lang, Text::Disabled)) }
+                }
+                input name="api_key" type="password" placeholder=(text(ctx.lang, Text::ApiKey));
+                input name="webhook_secret" type="password" placeholder=(text(ctx.lang, Text::WebhookSecret));
+                span class="status" {
+                    (text(ctx.lang, Text::ApiKey)) ": "
+                    @if provider.api_key_configured {
+                        (text(ctx.lang, Text::Configured))
+                    } @else {
+                        (text(ctx.lang, Text::Disabled))
+                    }
+                }
+                button type="submit" { (text(ctx.lang, Text::Save)) }
+                p class="status" data-form-status="" {}
             }
-            button type="submit" { (text(ctx.lang, Text::Save)) }
-            p class="status" data-form-status="" {}
+            (delete_form(ctx, &format!("/api/v1/admin/provider-accounts/{}", provider.id)))
         }
     }
 }
@@ -535,7 +573,7 @@ fn mailboxes(ctx: &PageContext, data: &AdminData) -> Markup {
     html! {
         section class="panel accent" {
             h2 { (text(ctx.lang, Text::Add)) " " (text(ctx.lang, Text::Mailboxes)) }
-            form class="form-grid" data-api-form="" data-endpoint="/api/v1/admin/mailboxes" {
+            form class="form-grid" data-api-form="" data-reload="true" data-endpoint="/api/v1/admin/mailboxes" {
                 (field(ctx, Text::Email, "owner_email", "email", ""))
                 (field(ctx, Text::Mailboxes, "mailbox_email", "email", ""))
                 (submit_row(ctx, Text::Create))
@@ -713,6 +751,15 @@ fn bool_select(ctx: &PageContext, name: &str, value: bool, label: Text) -> Marku
                 option value="true" selected[value] { (text(ctx.lang, Text::Enabled)) }
                 option value="false" selected[!value] { (text(ctx.lang, Text::Disabled)) }
             }
+        }
+    }
+}
+
+fn delete_form(ctx: &PageContext, endpoint: &str) -> Markup {
+    html! {
+        form data-api-form="" data-reset="false" data-reload="true" data-method="DELETE" data-endpoint=(endpoint) {
+            button class="secondary" type="submit" { (text(ctx.lang, Text::Delete)) }
+            p class="status" data-form-status="" {}
         }
     }
 }

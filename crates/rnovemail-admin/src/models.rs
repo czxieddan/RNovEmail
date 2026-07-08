@@ -52,6 +52,7 @@ pub struct ProviderRow {
     pub provider_type: String,
     pub domains: String,
     pub enabled: bool,
+    pub api_key_configured: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

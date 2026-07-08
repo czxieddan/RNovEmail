@@ -1378,6 +1378,7 @@ dependencies = [
  "serde",
  "thiserror",
  "uuid",
+ "zeroize",
 ]
 
 [[package]]

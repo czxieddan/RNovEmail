@@ -3,7 +3,7 @@ use reqwest::Client;
 use rnovemail_domain::{MessageId, ProviderType};
 use rnovemail_webhook::SignatureVerifier;
 use secrecy::{ExposeSecret, SecretString};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::{
     MailProvider, ProviderError, ProviderEvent, ProviderSendReceipt, ProviderWebhookRequest,
@@ -14,14 +14,20 @@ use crate::{
 pub struct ResendProvider {
     api_key: SecretString,
     client: Client,
+    endpoint: String,
     webhook_verifier: Option<SignatureVerifier>,
 }
 
 impl ResendProvider {
     pub fn new(api_key: SecretString) -> Self {
+        Self::with_endpoint(api_key, "https://api.resend.com")
+    }
+
+    pub fn with_endpoint(api_key: SecretString, endpoint: impl Into<String>) -> Self {
         Self {
             api_key,
             client: Client::new(),
+            endpoint: endpoint.into(),
             webhook_verifier: None,
         }
     }
@@ -35,6 +41,7 @@ impl ResendProvider {
         Ok(Self {
             api_key,
             client: Client::new(),
+            endpoint: "https://api.resend.com".to_string(),
             webhook_verifier: Some(verifier),
         })
     }
@@ -50,16 +57,20 @@ impl MailProvider for ResendProvider {
         let payload = ResendSendPayload::from_request(&request);
         let response = self
             .client
-            .post("https://api.resend.com/emails")
+            .post(send_endpoint(&self.endpoint))
             .bearer_auth(self.api_key.expose_secret())
             .json(&payload)
             .send()
             .await
             .map_err(|_| ProviderError::ProviderRejected)?;
         ensure_success(response.status().is_success())?;
+        let accepted = response
+            .json::<ResendSendResponse>()
+            .await
+            .map_err(|_| ProviderError::InvalidPayload)?;
         Ok(ProviderSendReceipt {
             message_id: MessageId::new(),
-            provider_message_id: "resend-accepted".to_string(),
+            provider_message_id: accepted.id,
         })
     }
 
@@ -104,6 +115,11 @@ struct ResendSendPayload<'a> {
     html: Option<&'a str>,
 }
 
+#[derive(Deserialize)]
+struct ResendSendResponse {
+    id: String,
+}
+
 impl<'a> ResendSendPayload<'a> {
     fn from_request(request: &'a SendMailRequest) -> Self {
         Self {
@@ -114,6 +130,10 @@ impl<'a> ResendSendPayload<'a> {
             html: request.html(),
         }
     }
+}
+
+fn send_endpoint(endpoint: &str) -> String {
+    format!("{}/emails", endpoint.trim_end_matches('/'))
 }
 
 fn ensure_success(success: bool) -> Result<(), ProviderError> {

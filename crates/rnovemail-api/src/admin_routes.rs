@@ -1,7 +1,7 @@
 use axum::{
     Json, Router,
     extract::{Path, State},
-    http::HeaderMap,
+    http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::{patch, post},
 };
@@ -20,11 +20,14 @@ pub fn routes() -> Router<AppState> {
         .route("/api/v1/admin/users", post(create_user))
         .route("/api/v1/admin/users/{id}", patch(update_user))
         .route("/api/v1/admin/domains", post(create_domain))
-        .route("/api/v1/admin/domains/{id}", patch(update_domain))
+        .route(
+            "/api/v1/admin/domains/{id}",
+            patch(update_domain).delete(delete_domain),
+        )
         .route("/api/v1/admin/provider-accounts", post(create_provider))
         .route(
             "/api/v1/admin/provider-accounts/{id}",
-            patch(update_provider),
+            patch(update_provider).delete(delete_provider),
         )
         .route("/api/v1/admin/mailboxes", post(create_mailbox))
         .route("/api/v1/admin/mailboxes/{id}", patch(update_mailbox))
@@ -72,17 +75,25 @@ async fn update_domain(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(id): Path<String>,
+    Json(request): Json<UpdateDomainRequest>,
 ) -> Response {
     if let Err(rejection) = state.require_admin(&headers) {
         return rejection.into_response();
     }
-    match DomainName::parse(id) {
-        Ok(domain) => Json(DomainResponse {
-            domain: domain.as_str().to_string(),
-        })
-        .into_response(),
-        Err(_) => ApiRejection::BadRequest.into_response(),
+    update_domain_response(&state, id, request)
+        .await
+        .into_response()
+}
+
+async fn delete_domain(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Response {
+    if let Err(rejection) = state.require_admin(&headers) {
+        return rejection.into_response();
     }
+    delete_domain_response(&state, id).await.into_response()
 }
 
 async fn create_provider(
@@ -110,6 +121,17 @@ async fn update_provider(
     update_provider_response(&state, id, request)
         .await
         .into_response()
+}
+
+async fn delete_provider(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Response {
+    if let Err(rejection) = state.require_admin(&headers) {
+        return rejection.into_response();
+    }
+    delete_provider_response(&state, id).await.into_response()
 }
 
 async fn create_mailbox(
@@ -189,8 +211,10 @@ async fn create_provider_response(
 ) -> Result<Json<ProviderResponse>, ApiRejection> {
     let provider_type = parse_provider(&request.provider_type)?;
     let domains = parse_domains(request.domains)?;
-    let provider = ProviderAccount::new(provider_type, request.name, domains);
-    let provider = state.add_provider(provider, request.webhook_secret).await?;
+    let provider = ProviderAccount::new(provider_type, request.name, domains)
+        .with_api_key(optional_secret(request.api_key))
+        .with_webhook_secret(optional_secret(request.webhook_secret));
+    let provider = state.add_provider(provider).await?;
     Ok(Json(ProviderResponse::from_provider(&provider)))
 }
 
@@ -204,9 +228,38 @@ async fn update_provider_response(
         name: request.name,
         domains,
         enabled: request.enabled,
+        api_key: optional_secret(request.api_key),
+        webhook_secret: optional_secret(request.webhook_secret),
     };
     let provider = state.update_provider(&id, patch).await?;
     Ok(Json(ProviderResponse::from_provider(&provider)))
+}
+
+async fn update_domain_response(
+    state: &AppState,
+    id: String,
+    request: UpdateDomainRequest,
+) -> Result<Json<DomainResponse>, ApiRejection> {
+    let old_domain = DomainName::parse(id).map_err(|_| ApiRejection::BadRequest)?;
+    let new_domain = DomainName::parse(request.domain).map_err(|_| ApiRejection::BadRequest)?;
+    let domain = state.update_domain(old_domain, new_domain).await?;
+    Ok(Json(DomainResponse {
+        domain: domain.as_str().to_string(),
+    }))
+}
+
+async fn delete_domain_response(state: &AppState, id: String) -> Result<StatusCode, ApiRejection> {
+    let domain = DomainName::parse(id).map_err(|_| ApiRejection::BadRequest)?;
+    state.delete_domain(domain).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn delete_provider_response(
+    state: &AppState,
+    id: String,
+) -> Result<StatusCode, ApiRejection> {
+    state.delete_provider(&id).await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn create_mailbox_response(
@@ -265,6 +318,12 @@ fn login_secret_hash(secret: Option<String>) -> Result<Option<String>, ApiReject
         .map_err(|_| ApiRejection::BadRequest)
 }
 
+fn optional_secret(secret: Option<String>) -> Option<String> {
+    secret
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
 #[derive(Deserialize)]
 struct CreateUserRequest {
     display_name: String,
@@ -288,10 +347,16 @@ struct CreateDomainRequest {
 }
 
 #[derive(Deserialize)]
+struct UpdateDomainRequest {
+    domain: String,
+}
+
+#[derive(Deserialize)]
 struct CreateProviderRequest {
     name: String,
     provider_type: String,
     domains: Vec<String>,
+    api_key: Option<String>,
     webhook_secret: Option<String>,
 }
 
@@ -300,6 +365,8 @@ struct UpdateProviderRequest {
     name: Option<String>,
     domains: Option<Vec<String>>,
     enabled: Option<bool>,
+    api_key: Option<String>,
+    webhook_secret: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -339,6 +406,7 @@ struct DomainResponse {
 struct ProviderResponse {
     id: String,
     provider_type: String,
+    api_key_configured: bool,
 }
 
 impl ProviderResponse {
@@ -347,6 +415,7 @@ impl ProviderResponse {
             ProviderType::Resend => Self {
                 id: serialized_key(&provider.id()),
                 provider_type: "resend".to_string(),
+                api_key_configured: provider.api_key_configured(),
             },
         }
     }

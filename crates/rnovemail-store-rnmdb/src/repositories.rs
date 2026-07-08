@@ -126,12 +126,24 @@ impl RnovStore {
             .map_err(|_| StoreError::OperationFailed)
     }
 
+    pub fn delete_raw(&self, namespace: &str, key: &str) -> Result<(), StoreError> {
+        ensure_namespace(namespace)?;
+        let record = RawRecord::new(namespace, key, &[]);
+        let backend = self.backend()?;
+        let meta = load_meta(&backend)?;
+        write_record(&backend, meta, &record)?;
+        backend
+            .sync()
+            .map(|_| ())
+            .map_err(|_| StoreError::OperationFailed)
+    }
+
     pub fn get_raw(&self, namespace: &str, key: &str) -> Result<Option<Vec<u8>>, StoreError> {
         ensure_namespace(namespace)?;
         let backend = self.backend()?;
         let meta = load_meta(&backend)?;
         let record = find_record(&backend, &meta, namespace, key)?;
-        Ok(record.map(|record| record.value))
+        Ok(record.and_then(record_value))
     }
 
     pub fn list_raw(&self, namespace: &str) -> Result<Vec<(String, Vec<u8>)>, StoreError> {
@@ -139,10 +151,7 @@ impl RnovStore {
         let backend = self.backend()?;
         let meta = load_meta(&backend)?;
         let records = list_records(&backend, &meta, namespace)?;
-        Ok(records
-            .into_iter()
-            .map(|record| (record.key, record.value))
-            .collect())
+        Ok(records.into_iter().filter_map(active_record).collect())
     }
 
     pub fn sync_status(&self) -> Result<SyncStatus, StoreError> {
@@ -175,6 +184,10 @@ impl UserRepository for RnovStore {
 impl DomainRepository for RnovStore {
     async fn put_domain(&self, domain: DomainName) -> Result<(), StoreError> {
         put_typed(self, "domains_by_name", domain.as_str(), &domain)
+    }
+
+    async fn delete_domain(&self, domain: &DomainName) -> Result<(), StoreError> {
+        self.delete_raw("domains_by_name", domain.as_str())
     }
 
     async fn contains_domain(&self, domain: &DomainName) -> Result<bool, StoreError> {
@@ -216,6 +229,10 @@ impl ProviderRepository for RnovStore {
             &json_key(&provider.id())?,
             &provider,
         )
+    }
+
+    async fn delete_provider(&self, provider: &ProviderAccount) -> Result<(), StoreError> {
+        self.delete_raw("provider_accounts_by_id", &json_key(&provider.id())?)
     }
 
     async fn list_providers(&self) -> Result<Vec<ProviderAccount>, StoreError> {
@@ -410,6 +427,20 @@ fn append_matching_record(
         records.push(record);
     }
     Ok(())
+}
+
+fn active_record(record: RawRecord) -> Option<(String, Vec<u8>)> {
+    match record.value.is_empty() {
+        true => None,
+        false => Some((record.key, record.value)),
+    }
+}
+
+fn record_value(record: RawRecord) -> Option<Vec<u8>> {
+    match record.value.is_empty() {
+        true => None,
+        false => Some(record.value),
+    }
 }
 
 fn find_record_page(

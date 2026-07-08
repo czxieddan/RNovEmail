@@ -26,7 +26,7 @@ async fn send_mail(
     if let Err(rejection) = state.require_admin(&headers) {
         return rejection.into_response();
     }
-    send_mail_response(&state, request).into_response()
+    send_mail_response(&state, request).await.into_response()
 }
 
 async fn get_outbound(State(state): State<AppState>, headers: HeaderMap) -> Response {
@@ -44,13 +44,13 @@ fn token_accept(state: &AppState, headers: HeaderMap, accepted: &'static str) ->
     axum::Json(serde_json::json!({ "status": accepted })).into_response()
 }
 
-fn send_mail_response(
+async fn send_mail_response(
     state: &AppState,
     request: SendMailApiRequest,
 ) -> Result<Json<SendMailResponse>, ApiRejection> {
     let mail = request.try_into_mail_request()?;
-    let provider = state.provider_for_sender(mail.from())?;
-    Ok(Json(SendMailResponse::queued(provider)))
+    let (provider, receipt) = state.send_mail(mail).await?;
+    Ok(Json(SendMailResponse::sent(provider, receipt)))
 }
 
 #[derive(Deserialize)]
@@ -80,14 +80,16 @@ struct SendMailResponse {
     status: &'static str,
     provider_type: &'static str,
     message_id: MessageId,
+    provider_message_id: String,
 }
 
 impl SendMailResponse {
-    fn queued(provider: ProviderAccount) -> Self {
+    fn sent(provider: ProviderAccount, receipt: rnovemail_providers::ProviderSendReceipt) -> Self {
         Self {
-            status: "send_queued",
+            status: "sent",
             provider_type: provider_type_name(provider.provider_type()),
-            message_id: MessageId::new(),
+            message_id: receipt.message_id,
+            provider_message_id: receipt.provider_message_id,
         }
     }
 }

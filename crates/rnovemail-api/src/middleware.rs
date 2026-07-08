@@ -16,6 +16,8 @@ pub enum ApiRejection {
     BadRequest,
     NotFound,
     NoProviderForDomain,
+    ProviderApiKeyMissing,
+    ProviderRejected,
     InvalidWebhookSignature,
     DuplicateWebhookEvent,
     StateUnavailable,
@@ -32,6 +34,10 @@ impl IntoResponse for ApiRejection {
             Self::NoProviderForDomain => {
                 json_error(StatusCode::FORBIDDEN, "no_provider_for_domain")
             }
+            Self::ProviderApiKeyMissing => {
+                json_error(StatusCode::BAD_REQUEST, "provider_api_key_missing")
+            }
+            Self::ProviderRejected => json_error(StatusCode::BAD_GATEWAY, "provider_rejected"),
             Self::InvalidWebhookSignature => {
                 json_error(StatusCode::UNAUTHORIZED, "invalid_webhook_signature")
             }

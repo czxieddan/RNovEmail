@@ -159,6 +159,7 @@ fn provider_row(provider: ProviderAccount) -> ProviderRow {
             .collect::<Vec<_>>()
             .join(", "),
         enabled: provider.enabled(),
+        api_key_configured: provider.api_key_configured(),
     }
 }
 

@@ -9,7 +9,10 @@ use rnovemail_domain::{
     AuditActor, AuditEvent, AuditResult, DomainName, EmailAddress, Mailbox, ProviderAccount,
     ProviderType, User, UserRole, UserStatus,
 };
-use rnovemail_providers::{MailProvider, ProviderEvent, ProviderWebhookRequest, ResendProvider};
+use rnovemail_providers::{
+    MailProvider, ProviderError, ProviderEvent, ProviderSendReceipt, ProviderWebhookRequest,
+    ResendProvider, SendMailRequest,
+};
 use rnovemail_store::{AppStore, StoreError};
 use rnovemail_webhook::SignatureVerifier;
 use secrecy::{ExposeSecret, SecretString};
@@ -33,6 +36,7 @@ struct AppStateInner {
     admin_token: Option<String>,
     store: Option<Arc<dyn AppStore>>,
     data: RwLock<AppData>,
+    resend_endpoint: RwLock<String>,
     sessions: RwLock<SessionRegistry>,
 }
 
@@ -60,6 +64,13 @@ impl AppState {
 
     pub fn with_admin_token(token: impl Into<String>) -> Self {
         Self::new(Some(token.into()))
+    }
+
+    pub fn with_resend_endpoint(self, endpoint: impl Into<String>) -> Self {
+        if let Ok(mut value) = self.inner.resend_endpoint.write() {
+            *value = endpoint.into();
+        }
+        self
     }
 
     pub async fn with_persistent_store<S>(
@@ -234,12 +245,48 @@ impl AppState {
         Ok(domain)
     }
 
+    pub(crate) async fn update_domain(
+        &self,
+        old_domain: DomainName,
+        new_domain: DomainName,
+    ) -> Result<DomainName, ApiRejection> {
+        if let Some(store) = self.store() {
+            store
+                .delete_domain(&old_domain)
+                .await
+                .map_err(store_error)?;
+            store
+                .put_domain(new_domain.clone())
+                .await
+                .map_err(store_error)?;
+        }
+        {
+            let mut data = self.write_data()?;
+            data.domains.remove(&old_domain);
+            data.domains.insert(new_domain.clone());
+        }
+        self.record_audit("admin.domain.update", new_domain.as_str())
+            .await?;
+        Ok(new_domain)
+    }
+
+    pub(crate) async fn delete_domain(&self, domain: DomainName) -> Result<(), ApiRejection> {
+        if let Some(store) = self.store() {
+            store.delete_domain(&domain).await.map_err(store_error)?;
+        }
+        {
+            let mut data = self.write_data()?;
+            data.domains.remove(&domain);
+        }
+        self.record_audit("admin.domain.delete", domain.as_str())
+            .await
+    }
+
     pub(crate) async fn add_provider(
         &self,
         provider: ProviderAccount,
-        webhook_secret: Option<String>,
     ) -> Result<ProviderAccount, ApiRejection> {
-        let binding = webhook_binding(provider.provider_type(), webhook_secret)?;
+        let binding = provider_webhook_binding(&provider)?;
         if let Some(store) = self.store() {
             store
                 .put_provider(provider.clone())
@@ -263,15 +310,28 @@ impl AppState {
     ) -> Result<ProviderAccount, ApiRejection> {
         let mut provider = self.provider_by_id(id)?;
         patch.apply(&mut provider);
+        let binding = provider_webhook_binding(&provider)?;
         if let Some(store) = self.store() {
             store
                 .put_provider(provider.clone())
                 .await
                 .map_err(store_error)?;
         }
-        self.replace_provider(provider.clone())?;
+        self.replace_provider(provider.clone(), binding)?;
         self.record_audit("admin.provider.update", id).await?;
         Ok(provider)
+    }
+
+    pub(crate) async fn delete_provider(&self, id: &str) -> Result<(), ApiRejection> {
+        let provider = self.provider_by_id(id)?;
+        if let Some(store) = self.store() {
+            store
+                .delete_provider(&provider)
+                .await
+                .map_err(store_error)?;
+        }
+        self.remove_provider(id)?;
+        self.record_audit("admin.provider.delete", id).await
     }
 
     pub(crate) fn provider_for_sender(
@@ -279,11 +339,25 @@ impl AppState {
         sender: &EmailAddress,
     ) -> Result<ProviderAccount, ApiRejection> {
         let data = self.read_data()?;
+        if !data.domains.contains(sender.domain()) {
+            return Err(ApiRejection::NoProviderForDomain);
+        }
         data.providers
             .iter()
             .find(|provider| provider.serves_domain(sender.domain()))
             .cloned()
             .ok_or(ApiRejection::NoProviderForDomain)
+    }
+
+    pub(crate) async fn send_mail(
+        &self,
+        request: SendMailRequest,
+    ) -> Result<(ProviderAccount, ProviderSendReceipt), ApiRejection> {
+        let provider = self.provider_for_sender(request.from())?;
+        let receipt = self.deliver_with_provider(&provider, request).await?;
+        self.record_audit("mail.outbound.send", &provider_key(&provider))
+            .await?;
+        Ok((provider, receipt))
     }
 
     pub(crate) async fn add_mailbox(
@@ -347,6 +421,7 @@ impl AppState {
                 admin_token,
                 store: None,
                 data: RwLock::new(AppData::default()),
+                resend_endpoint: RwLock::new(default_resend_endpoint()),
                 sessions: RwLock::new(SessionRegistry::default()),
             }),
         }
@@ -363,6 +438,7 @@ impl AppState {
                 admin_token,
                 store,
                 data: RwLock::new(data),
+                resend_endpoint: RwLock::new(default_resend_endpoint()),
                 sessions: RwLock::new(SessionRegistry::default()),
             }),
         }
@@ -455,13 +531,60 @@ impl AppState {
             .ok_or(ApiRejection::NotFound)
     }
 
-    fn replace_provider(&self, provider: ProviderAccount) -> Result<(), ApiRejection> {
+    fn replace_provider(
+        &self,
+        provider: ProviderAccount,
+        binding: Option<WebhookBinding>,
+    ) -> Result<(), ApiRejection> {
         let mut data = self.write_data()?;
         let key = provider_key(&provider);
         data.providers
             .retain(|candidate| provider_key(candidate) != key);
+        data.webhook_bindings.remove(&key);
+        insert_webhook_binding(&mut data, &provider, binding);
         data.providers.push(provider);
         Ok(())
+    }
+
+    fn remove_provider(&self, id: &str) -> Result<(), ApiRejection> {
+        let mut data = self.write_data()?;
+        data.providers
+            .retain(|provider| provider_key(provider) != id);
+        data.webhook_bindings.remove(id);
+        Ok(())
+    }
+
+    async fn deliver_with_provider(
+        &self,
+        provider: &ProviderAccount,
+        request: SendMailRequest,
+    ) -> Result<ProviderSendReceipt, ApiRejection> {
+        match provider.provider_type() {
+            ProviderType::Resend => self.deliver_with_resend(provider, request).await,
+        }
+    }
+
+    async fn deliver_with_resend(
+        &self,
+        provider: &ProviderAccount,
+        request: SendMailRequest,
+    ) -> Result<ProviderSendReceipt, ApiRejection> {
+        let api_key = provider
+            .api_key()
+            .ok_or(ApiRejection::ProviderApiKeyMissing)?;
+        let endpoint = self.resend_endpoint()?;
+        ResendProvider::with_endpoint(SecretString::new(api_key.to_string()), endpoint)
+            .send(request)
+            .await
+            .map_err(provider_error)
+    }
+
+    fn resend_endpoint(&self) -> Result<String, ApiRejection> {
+        self.inner
+            .resend_endpoint
+            .read()
+            .map(|value| value.clone())
+            .map_err(|_| ApiRejection::StateUnavailable)
     }
 
     fn mailbox_by_email(&self, email: &EmailAddress) -> Result<Mailbox, ApiRejection> {
@@ -561,6 +684,8 @@ pub(crate) struct ProviderPatch {
     pub name: Option<String>,
     pub domains: Option<Vec<DomainName>>,
     pub enabled: Option<bool>,
+    pub api_key: Option<String>,
+    pub webhook_secret: Option<String>,
 }
 
 impl ProviderPatch {
@@ -573,6 +698,12 @@ impl ProviderPatch {
         }
         if let Some(enabled) = self.enabled {
             provider.set_enabled(enabled);
+        }
+        if let Some(api_key) = self.api_key {
+            provider.replace_api_key(api_key);
+        }
+        if let Some(webhook_secret) = self.webhook_secret {
+            provider.replace_webhook_secret(webhook_secret);
         }
     }
 }
@@ -599,19 +730,25 @@ impl MailboxPatch {
 
 fn webhook_binding(
     provider_type: ProviderType,
-    webhook_secret: Option<String>,
+    webhook_secret: Option<&str>,
 ) -> Result<Option<WebhookBinding>, ApiRejection> {
     webhook_secret
         .map(|secret| WebhookBinding::new(provider_type, secret))
         .transpose()
 }
 
+fn provider_webhook_binding(
+    provider: &ProviderAccount,
+) -> Result<Option<WebhookBinding>, ApiRejection> {
+    webhook_binding(provider.provider_type(), provider.webhook_secret())
+}
+
 impl WebhookBinding {
-    fn new(provider_type: ProviderType, secret: String) -> Result<Self, ApiRejection> {
-        SignatureVerifier::from_svix_secret(&secret).map_err(|_| ApiRejection::BadRequest)?;
+    fn new(provider_type: ProviderType, secret: &str) -> Result<Self, ApiRejection> {
+        SignatureVerifier::from_svix_secret(secret).map_err(|_| ApiRejection::BadRequest)?;
         Ok(Self {
             provider_type,
-            secret: SecretString::new(secret),
+            secret: SecretString::new(secret.to_string()),
         })
     }
 }
@@ -718,15 +855,37 @@ async fn load_app_data(store: &dyn AppStore) -> Result<AppData, StoreError> {
     let providers = store.list_providers().await?;
     let mailboxes = store.list_mailboxes().await?;
     let audit_events = store.list_audit().await?;
+    let webhook_bindings = webhook_bindings(&providers)?;
     Ok(AppData {
         users: keyed_users(users),
         domains: domains.into_iter().collect(),
         providers,
         mailboxes: keyed_mailboxes(mailboxes),
-        webhook_bindings: HashMap::new(),
+        webhook_bindings,
         webhook_events: HashSet::new(),
         audit_events,
     })
+}
+
+fn webhook_bindings(
+    providers: &[ProviderAccount],
+) -> Result<HashMap<String, WebhookBinding>, StoreError> {
+    let mut bindings = HashMap::new();
+    for provider in providers {
+        append_webhook_binding(provider, &mut bindings)?;
+    }
+    Ok(bindings)
+}
+
+fn append_webhook_binding(
+    provider: &ProviderAccount,
+    bindings: &mut HashMap<String, WebhookBinding>,
+) -> Result<(), StoreError> {
+    let binding = provider_webhook_binding(provider).map_err(|_| StoreError::OperationFailed)?;
+    if let Some(binding) = binding {
+        bindings.insert(provider_key(provider), binding);
+    }
+    Ok(())
 }
 
 fn keyed_users(users: Vec<User>) -> HashMap<String, User> {
@@ -745,6 +904,20 @@ fn keyed_mailboxes(mailboxes: Vec<Mailbox>) -> HashMap<String, Mailbox> {
 
 fn store_error(_error: StoreError) -> ApiRejection {
     ApiRejection::StateUnavailable
+}
+
+fn provider_error(error: ProviderError) -> ApiRejection {
+    match error {
+        ProviderError::NoProviderForDomain => ApiRejection::NoProviderForDomain,
+        ProviderError::MissingField(_) | ProviderError::EmptyRecipients => ApiRejection::BadRequest,
+        ProviderError::InvalidPayload => ApiRejection::BadRequest,
+        ProviderError::InvalidSignature => ApiRejection::InvalidWebhookSignature,
+        ProviderError::ProviderRejected => ApiRejection::ProviderRejected,
+    }
+}
+
+fn default_resend_endpoint() -> String {
+    "https://api.resend.com".to_string()
 }
 
 pub fn build_router(state: AppState) -> Router {

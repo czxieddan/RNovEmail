@@ -16,6 +16,7 @@ pub trait UserRepository: Send + Sync {
 #[async_trait]
 pub trait DomainRepository: Send + Sync {
     async fn put_domain(&self, domain: DomainName) -> Result<(), StoreError>;
+    async fn delete_domain(&self, domain: &DomainName) -> Result<(), StoreError>;
     async fn contains_domain(&self, domain: &DomainName) -> Result<bool, StoreError>;
     async fn list_domains(&self) -> Result<Vec<DomainName>, StoreError>;
 }
@@ -30,6 +31,7 @@ pub trait MailboxRepository: Send + Sync {
 #[async_trait]
 pub trait ProviderRepository: Send + Sync {
     async fn put_provider(&self, provider: ProviderAccount) -> Result<(), StoreError>;
+    async fn delete_provider(&self, provider: &ProviderAccount) -> Result<(), StoreError>;
     async fn list_providers(&self) -> Result<Vec<ProviderAccount>, StoreError>;
 }
 
