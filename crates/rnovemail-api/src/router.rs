@@ -7,9 +7,9 @@ use axum::{Json, Router, http::HeaderMap, response::Redirect, routing::get};
 use chrono::Utc;
 use rnovemail_auth::verify_login_secret;
 use rnovemail_domain::{
-    AuditActor, AuditEvent, AuditResult, DomainName, EmailAddress, InboundMessage, Mailbox,
-    MailboxStatus, MessageStatus, MessageTimelineEntry, OutboundMessage, ProviderAccount,
-    ProviderType, User, UserRole, UserStatus,
+    AuditActor, AuditEvent, AuditResult, DomainName, EmailAddress, InboundMessage,
+    InboundMessageDetail, Mailbox, MailboxStatus, MessageStatus, MessageTimelineEntry,
+    OutboundMessage, ProviderAccount, ProviderAccountId, ProviderType, User, UserRole, UserStatus,
 };
 use rnovemail_providers::{
     MailProvider, ProviderError, ProviderEvent, ProviderSendReceipt, ProviderWebhookRequest,
@@ -60,6 +60,16 @@ struct AppData {
 struct WebhookBinding {
     provider_type: ProviderType,
     secret: SecretString,
+}
+
+struct InboundRecord {
+    provider_account_id: ProviderAccountId,
+    provider_event_id: String,
+    from: EmailAddress,
+    recipients: Vec<EmailAddress>,
+    subject: String,
+    text: String,
+    detail: Option<InboundMessageDetail>,
 }
 
 impl AppState {
@@ -208,6 +218,14 @@ impl AppState {
     pub(crate) fn list_inbound_messages(&self) -> Result<Vec<InboundMessage>, ApiRejection> {
         let data = self.read_data()?;
         Ok(data.inbound_messages.values().cloned().collect())
+    }
+
+    pub(crate) fn inbound_message_by_id(&self, id: &str) -> Result<InboundMessage, ApiRejection> {
+        let data = self.read_data()?;
+        data.inbound_messages
+            .get(id)
+            .cloned()
+            .ok_or(ApiRejection::NotFound)
     }
 
     pub(crate) fn list_audit(&self) -> Result<Vec<AuditEvent>, ApiRejection> {
@@ -571,8 +589,19 @@ impl AppState {
                 subject,
                 text,
             } => {
-                self.record_inbound_messages(provider_event_id, from, to, subject, text)
-                    .await
+                let detail = self
+                    .inbound_message_detail(account, &provider_event_id)
+                    .await;
+                self.record_inbound_messages(InboundRecord {
+                    provider_account_id: account.id(),
+                    provider_event_id,
+                    from,
+                    recipients: to,
+                    subject,
+                    text,
+                    detail,
+                })
+                .await
             }
             ProviderEvent::Delivered { .. }
             | ProviderEvent::Bounced { .. }
@@ -584,34 +613,18 @@ impl AppState {
         Ok(())
     }
 
-    async fn record_inbound_messages(
-        &self,
-        provider_event_id: String,
-        from: EmailAddress,
-        to: Vec<EmailAddress>,
-        subject: String,
-        text: String,
-    ) -> Result<(), ApiRejection> {
-        for recipient in to {
-            self.record_inbound_for_recipient(
-                &provider_event_id,
-                &from,
-                &recipient,
-                &subject,
-                &text,
-            )
-            .await?;
+    async fn record_inbound_messages(&self, record: InboundRecord) -> Result<(), ApiRejection> {
+        for recipient in &record.recipients {
+            self.record_inbound_for_recipient(&record, recipient)
+                .await?;
         }
         Ok(())
     }
 
     async fn record_inbound_for_recipient(
         &self,
-        provider_event_id: &str,
-        from: &EmailAddress,
+        record: &InboundRecord,
         recipient: &EmailAddress,
-        subject: &str,
-        text: &str,
     ) -> Result<(), ApiRejection> {
         let Some(mailbox) = self.optional_mailbox_by_email(recipient)? else {
             return Ok(());
@@ -619,9 +632,55 @@ impl AppState {
         if !is_inbound_mailbox(&mailbox) {
             return Ok(());
         }
-        let message = inbound_message(provider_event_id, from, &mailbox, subject, text);
+        let message = inbound_message(
+            record.provider_account_id,
+            &record.provider_event_id,
+            &record.from,
+            &mailbox,
+            &record.subject,
+            &record.text,
+            record.detail.clone(),
+        );
         self.persist_inbound_message(&message).await?;
         self.insert_inbound_message(message)
+    }
+
+    async fn inbound_message_detail(
+        &self,
+        account: &ProviderAccount,
+        provider_event_id: &str,
+    ) -> Option<InboundMessageDetail> {
+        self.retrieve_inbound_message_detail(account, provider_event_id)
+            .await
+            .ok()
+    }
+
+    async fn retrieve_inbound_message_detail(
+        &self,
+        account: &ProviderAccount,
+        provider_event_id: &str,
+    ) -> Result<InboundMessageDetail, ApiRejection> {
+        match account.provider_type() {
+            ProviderType::Resend => {
+                self.retrieve_resend_inbound_detail(account, provider_event_id)
+                    .await
+            }
+        }
+    }
+
+    async fn retrieve_resend_inbound_detail(
+        &self,
+        account: &ProviderAccount,
+        provider_event_id: &str,
+    ) -> Result<InboundMessageDetail, ApiRejection> {
+        let api_key = account
+            .api_key()
+            .ok_or(ApiRejection::ProviderApiKeyMissing)?;
+        let endpoint = self.resend_endpoint()?;
+        ResendProvider::with_endpoint(SecretString::new(api_key.to_string()), endpoint)
+            .retrieve_received_email(provider_event_id)
+            .await
+            .map_err(provider_error)
     }
 
     async fn persist_inbound_message(&self, message: &InboundMessage) -> Result<(), ApiRejection> {
@@ -1271,21 +1330,63 @@ fn outbound_message(
 }
 
 fn inbound_message(
+    provider_account_id: rnovemail_domain::ProviderAccountId,
     provider_event_id: &str,
     from: &EmailAddress,
     mailbox: &Mailbox,
     subject: &str,
     text: &str,
+    detail: Option<InboundMessageDetail>,
 ) -> InboundMessage {
+    let display = inbound_display(provider_event_id, subject, text, detail);
     InboundMessage {
         id: rnovemail_domain::MessageId::new(),
         mailbox_id: mailbox.id(),
-        provider_event_id: provider_event_id.to_string(),
+        provider_account_id: Some(provider_account_id),
+        provider_event_id: display.provider_event_id,
         from: from.clone(),
-        subject: subject.to_string(),
-        text: text.to_string(),
+        subject: display.subject,
+        text: display.text,
         received_at: Utc::now(),
+        detail: display.detail,
     }
+}
+
+struct InboundDisplay {
+    provider_event_id: String,
+    subject: String,
+    text: String,
+    detail: Option<InboundMessageDetail>,
+}
+
+fn inbound_display(
+    provider_event_id: &str,
+    subject: &str,
+    text: &str,
+    detail: Option<InboundMessageDetail>,
+) -> InboundDisplay {
+    InboundDisplay {
+        provider_event_id: provider_event_id.to_string(),
+        subject: inbound_subject_text(subject, detail.as_ref()),
+        text: inbound_body_text(text, detail.as_ref()),
+        detail,
+    }
+}
+
+fn inbound_subject_text(subject: &str, detail: Option<&InboundMessageDetail>) -> String {
+    detail
+        .map(|detail| detail.subject.trim())
+        .filter(|subject| !subject.is_empty())
+        .unwrap_or(subject)
+        .to_string()
+}
+
+fn inbound_body_text(text: &str, detail: Option<&InboundMessageDetail>) -> String {
+    detail
+        .map(|detail| detail.text.trim())
+        .filter(|text| !text.is_empty())
+        .unwrap_or(text)
+        .to_string()
 }
 
 fn timeline_entry(status: MessageStatus, note: &str) -> MessageTimelineEntry {

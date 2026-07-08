@@ -83,6 +83,7 @@ pub struct PortalData {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MessageRow {
+    pub id: String,
     pub mailbox: String,
     pub from: String,
     pub to: String,
@@ -90,4 +91,42 @@ pub struct MessageRow {
     pub text: String,
     pub status: String,
     pub at: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PortalMessageData {
+    pub email: String,
+    pub message: MessageDetailRow,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MessageDetailRow {
+    pub mailbox: String,
+    pub from: String,
+    pub to: String,
+    pub cc: String,
+    pub bcc: String,
+    pub reply_to: String,
+    pub subject: String,
+    pub text: String,
+    pub html: String,
+    pub received_at: String,
+    pub headers: Vec<MessageHeaderRow>,
+    pub attachments: Vec<MessageAttachmentRow>,
+    pub raw_download_url: String,
+    pub raw_expires_at: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MessageHeaderRow {
+    pub name: String,
+    pub value: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MessageAttachmentRow {
+    pub filename: String,
+    pub content_type: String,
+    pub content_disposition: String,
+    pub content_id: String,
 }

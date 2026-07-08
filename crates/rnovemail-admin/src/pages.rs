@@ -265,6 +265,16 @@ button.secondary {
   font-size: 12px;
   overflow-wrap: anywhere;
 }
+.message-body {
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  margin: 10px 0 0;
+  max-height: 360px;
+  overflow: auto;
+  padding: 12px;
+  white-space: pre-wrap;
+}
 @media (max-width: 900px) {
   .shell { grid-template-columns: 1fr; }
   .side { border-bottom: 1px solid var(--line); border-right: 0; }
@@ -406,6 +416,48 @@ pub fn portal_page(ctx: &PageContext, data: &PortalData) -> Markup {
     )
 }
 
+pub fn portal_message_page(ctx: &PageContext, data: &crate::PortalMessageData) -> Markup {
+    app_layout(
+        ctx,
+        &data.message.subject,
+        false,
+        html! {
+            section class="panel accent" {
+                div class="actions" {
+                    a class="button secondary" href=(localized_path(ctx, "/portal")) {
+                        (text(ctx.lang, Text::Back))
+                    }
+                }
+                h2 { (&data.message.subject) }
+                div class="record-meta" {
+                    (detail_meta(ctx, Text::Email, &data.message.mailbox))
+                    (detail_meta(ctx, Text::From, &data.message.from))
+                    (detail_meta(ctx, Text::To, &data.message.to))
+                    (detail_meta(ctx, Text::Cc, &data.message.cc))
+                    (detail_meta(ctx, Text::Bcc, &data.message.bcc))
+                    (detail_meta(ctx, Text::ReplyTo, &data.message.reply_to))
+                    (detail_meta(ctx, Text::ReceivedAt, &data.message.received_at))
+                }
+            }
+            (message_body_panel(ctx, Text::Body, &data.message.text))
+            (message_body_panel(ctx, Text::Html, &data.message.html))
+            (headers_panel(ctx, &data.message.headers))
+            (attachments_panel(ctx, &data.message.attachments))
+            @if !data.message.raw_download_url.is_empty() {
+                section class="panel" {
+                    h2 { (text(ctx.lang, Text::RawMessage)) }
+                    (detail_meta(ctx, Text::ExpiresAt, &data.message.raw_expires_at))
+                    p {
+                        a href=(&data.message.raw_download_url) target="_blank" rel="noopener noreferrer" {
+                            (&data.message.raw_download_url)
+                        }
+                    }
+                }
+            }
+        },
+    )
+}
+
 fn compose_form(ctx: &PageContext, data: &PortalData) -> Markup {
     html! {
         section class="panel accent" {
@@ -448,6 +500,9 @@ fn message_table(
                             th { (if inbound { text(ctx.lang, Text::From) } else { text(ctx.lang, Text::To) }) }
                             th { (text(ctx.lang, Text::Subject)) }
                             th { (text(ctx.lang, Text::Status)) }
+                            @if inbound {
+                                th { (text(ctx.lang, Text::Details)) }
+                            }
                         }
                     }
                     tbody {
@@ -462,12 +517,99 @@ fn message_table(
                                     p { (&message.text) }
                                 }
                                 td { (message_status_text(ctx, &message.status)) }
+                                @if inbound {
+                                    td {
+                                        a class="button secondary" href=(localized_path(ctx, &format!("/portal/inbound/{}", message.id))) {
+                                            (text(ctx.lang, Text::Details))
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
                 }
             }
         }
+    }
+}
+
+fn detail_meta(ctx: &PageContext, label: Text, value: &str) -> Markup {
+    match value.is_empty() {
+        true => html! {},
+        false => html! {
+            p {
+                strong { (text(ctx.lang, label)) }
+                span { (value) }
+            }
+        },
+    }
+}
+
+fn message_body_panel(ctx: &PageContext, title: Text, value: &str) -> Markup {
+    match value.is_empty() {
+        true => html! {},
+        false => html! {
+            section class="panel" {
+                h2 { (text(ctx.lang, title)) }
+                pre class="message-body" { (value) }
+            }
+        },
+    }
+}
+
+fn headers_panel(ctx: &PageContext, headers: &[crate::MessageHeaderRow]) -> Markup {
+    match headers.is_empty() {
+        true => html! {},
+        false => html! {
+            section class="panel" {
+                h2 { (text(ctx.lang, Text::Headers)) }
+                div class="table-wrap" {
+                    table class="table" {
+                        tbody {
+                            @for header in headers {
+                                tr {
+                                    td { (&header.name) }
+                                    td { (&header.value) }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+    }
+}
+
+fn attachments_panel(ctx: &PageContext, attachments: &[crate::MessageAttachmentRow]) -> Markup {
+    match attachments.is_empty() {
+        true => html! {},
+        false => html! {
+            section class="panel" {
+                h2 { (text(ctx.lang, Text::Attachments)) }
+                div class="table-wrap" {
+                    table class="table" {
+                        thead {
+                            tr {
+                                th { (text(ctx.lang, Text::File)) }
+                                th { (text(ctx.lang, Text::ContentType)) }
+                                th { (text(ctx.lang, Text::Status)) }
+                                th { (text(ctx.lang, Text::ContentId)) }
+                            }
+                        }
+                        tbody {
+                            @for attachment in attachments {
+                                tr {
+                                    td { (&attachment.filename) }
+                                    td { (&attachment.content_type) }
+                                    td { (&attachment.content_disposition) }
+                                    td { (&attachment.content_id) }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
     }
 }
 

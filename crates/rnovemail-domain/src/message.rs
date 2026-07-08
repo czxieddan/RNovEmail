@@ -52,9 +52,48 @@ pub struct OutboundMessage {
 pub struct InboundMessage {
     pub id: MessageId,
     pub mailbox_id: MailboxId,
+    #[serde(default)]
+    pub provider_account_id: Option<ProviderAccountId>,
     pub provider_event_id: String,
     pub from: EmailAddress,
     pub subject: String,
     pub text: String,
     pub received_at: DateTime<Utc>,
+    #[serde(default)]
+    pub detail: Option<InboundMessageDetail>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub struct InboundMessageDetail {
+    pub from: String,
+    pub to: Vec<String>,
+    pub cc: Vec<String>,
+    pub bcc: Vec<String>,
+    pub reply_to: Vec<String>,
+    pub subject: String,
+    pub text: String,
+    pub html: Option<String>,
+    pub headers: Vec<InboundMessageHeader>,
+    pub attachments: Vec<InboundMessageAttachment>,
+    pub raw: Option<InboundMessageRaw>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct InboundMessageHeader {
+    pub name: String,
+    pub value: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct InboundMessageAttachment {
+    pub filename: String,
+    pub content_type: String,
+    pub content_disposition: String,
+    pub content_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct InboundMessageRaw {
+    pub download_url: String,
+    pub expires_at: Option<String>,
 }
