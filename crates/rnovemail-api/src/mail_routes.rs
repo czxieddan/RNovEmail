@@ -130,7 +130,7 @@ struct InboundMessageResponse {
     html: Option<String>,
     received_at: String,
     detail_available: bool,
-    detail_error: Option<&'static str>,
+    detail_error: Option<String>,
     detail: Option<InboundMessageDetail>,
 }
 
@@ -176,7 +176,7 @@ fn outbound_response(
 }
 
 impl InboundMessageResponse {
-    fn from_view(message: InboundMessage, detail_error: Option<&'static str>) -> Self {
+    fn from_view(message: InboundMessage, detail_error: Option<String>) -> Self {
         let detail = message.detail.clone();
         Self {
             id: serialized_key(&message.id),

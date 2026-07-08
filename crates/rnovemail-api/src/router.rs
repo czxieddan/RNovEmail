@@ -74,7 +74,7 @@ struct InboundRecord {
 
 pub(crate) struct InboundMessageView {
     pub message: InboundMessage,
-    pub detail_error: Option<&'static str>,
+    pub detail_error: Option<String>,
 }
 
 impl AppState {
@@ -1008,7 +1008,7 @@ impl InboundMessageView {
         }
     }
 
-    fn failed(message: InboundMessage, detail_error: &'static str) -> Self {
+    fn failed(message: InboundMessage, detail_error: String) -> Self {
         Self {
             message,
             detail_error: Some(detail_error),
@@ -1292,7 +1292,7 @@ fn provider_error(error: ProviderError) -> ApiRejection {
         ProviderError::MissingField(_) | ProviderError::EmptyRecipients => ApiRejection::BadRequest,
         ProviderError::InvalidPayload => ApiRejection::BadRequest,
         ProviderError::InvalidSignature => ApiRejection::InvalidWebhookSignature,
-        ProviderError::ProviderRejected => ApiRejection::ProviderRejected,
+        ProviderError::ProviderRejected { status } => ApiRejection::ProviderRejected { status },
     }
 }
 

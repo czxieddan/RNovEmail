@@ -11,7 +11,19 @@ pub enum ProviderError {
     #[error("provider webhook signature is invalid")]
     InvalidSignature,
     #[error("provider response was rejected")]
-    ProviderRejected,
+    ProviderRejected { status: Option<u16> },
     #[error("provider payload is invalid")]
     InvalidPayload,
+}
+
+impl ProviderError {
+    pub fn provider_rejected() -> Self {
+        Self::ProviderRejected { status: None }
+    }
+
+    pub fn provider_rejected_status(status: u16) -> Self {
+        Self::ProviderRejected {
+            status: Some(status),
+        }
+    }
 }

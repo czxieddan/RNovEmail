@@ -13,6 +13,8 @@ use crate::{
     SendMailRequest, VerifiedWebhook,
 };
 
+const USER_AGENT: &str = concat!("RNovEmail/", env!("CARGO_PKG_VERSION"));
+
 #[derive(Clone)]
 pub struct ResendProvider {
     api_key: SecretString,
@@ -29,7 +31,7 @@ impl ResendProvider {
     pub fn with_endpoint(api_key: SecretString, endpoint: impl Into<String>) -> Self {
         Self {
             api_key,
-            client: Client::new(),
+            client: http_client(),
             endpoint: endpoint.into(),
             webhook_verifier: None,
         }
@@ -43,7 +45,7 @@ impl ResendProvider {
             .map_err(|_| ProviderError::InvalidSignature)?;
         Ok(Self {
             api_key,
-            client: Client::new(),
+            client: http_client(),
             endpoint: "https://api.resend.com".to_string(),
             webhook_verifier: Some(verifier),
         })
@@ -59,8 +61,8 @@ impl ResendProvider {
             .bearer_auth(self.api_key.expose_secret())
             .send()
             .await
-            .map_err(|_| ProviderError::ProviderRejected)?;
-        ensure_success(response.status().is_success())?;
+            .map_err(|_| ProviderError::provider_rejected())?;
+        ensure_success(response.status())?;
         let received = response
             .json::<ResendReceivedEmailResponse>()
             .await
@@ -84,8 +86,8 @@ impl MailProvider for ResendProvider {
             .json(&payload)
             .send()
             .await
-            .map_err(|_| ProviderError::ProviderRejected)?;
-        ensure_success(response.status().is_success())?;
+            .map_err(|_| ProviderError::provider_rejected())?;
+        ensure_success(response.status())?;
         let accepted = response
             .json::<ResendSendResponse>()
             .await
@@ -165,10 +167,17 @@ fn received_email_endpoint(endpoint: &str, email_id: &str) -> String {
     )
 }
 
-fn ensure_success(success: bool) -> Result<(), ProviderError> {
-    match success {
+fn http_client() -> Client {
+    Client::builder()
+        .user_agent(USER_AGENT)
+        .build()
+        .unwrap_or_else(|_| Client::new())
+}
+
+fn ensure_success(status: reqwest::StatusCode) -> Result<(), ProviderError> {
+    match status.is_success() {
         true => Ok(()),
-        false => Err(ProviderError::ProviderRejected),
+        false => Err(ProviderError::provider_rejected_status(status.as_u16())),
     }
 }
 

@@ -100,9 +100,11 @@ async fn portal_message_data(
     let message = state.inbound_message_by_id(message_id)?;
     let mailbox = owned_message_mailbox(&message, &owned_mailboxes)?;
     let view = state.hydrate_inbound_message_view(message).await;
+    let message = view.message;
+    let detail_error = view.detail_error;
     Ok(PortalMessageData {
         email: email.as_str().to_string(),
-        message: message_detail_row(view.message, mailbox, view.detail_error),
+        message: message_detail_row(message, mailbox, detail_error.as_deref()),
     })
 }
 
