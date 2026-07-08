@@ -1,9 +1,10 @@
 use std::{
+    fmt::Write,
     path::{Path, PathBuf},
     sync::Mutex,
 };
 
-use crate::schema::RNOVEMAIL_NAMESPACES;
+use crate::schema::{RECORD_CHUNK_NAMESPACE, RNOVEMAIL_NAMESPACES};
 use crate::{MigrationPlan, keys::namespace_key};
 use async_trait::async_trait;
 use rnmdb_common::ids::PageId;
@@ -25,6 +26,7 @@ use zeroize::Zeroize;
 const DATABASE_FILE: &str = "rnovemail.rnmdb";
 const PAGE_SIZE_BYTES: usize = PageSize::DEFAULT_BYTES;
 const RECORD_HEADER_BYTES: usize = 4;
+const CHUNK_VALUE_BYTES: usize = 512;
 const META_PAGE_ID: u64 = 1;
 const FIRST_RECORD_PAGE_ID: u64 = 2;
 
@@ -116,10 +118,12 @@ impl RnovStore {
 
     pub fn put_raw(&self, namespace: &str, key: &str, value: &[u8]) -> Result<(), StoreError> {
         ensure_namespace(namespace)?;
-        let record = RawRecord::new(namespace, key, value);
+        let records = records_for_value(namespace, key, value);
         let backend = self.backend()?;
-        let meta = load_meta(&backend)?;
-        write_record(&backend, meta, &record)?;
+        let mut meta = load_meta(&backend)?;
+        for record in records {
+            meta = write_record(&backend, meta, &record)?;
+        }
         backend
             .sync()
             .map(|_| ())
@@ -143,7 +147,10 @@ impl RnovStore {
         let backend = self.backend()?;
         let meta = load_meta(&backend)?;
         let record = find_record(&backend, &meta, namespace, key)?;
-        Ok(record.and_then(record_value))
+        match record {
+            Some(record) => record_value(&backend, &meta, record),
+            None => Ok(None),
+        }
     }
 
     pub fn list_raw(&self, namespace: &str) -> Result<Vec<(String, Vec<u8>)>, StoreError> {
@@ -151,7 +158,7 @@ impl RnovStore {
         let backend = self.backend()?;
         let meta = load_meta(&backend)?;
         let records = list_records(&backend, &meta, namespace)?;
-        Ok(records.into_iter().filter_map(active_record).collect())
+        active_records(&backend, &meta, records)
     }
 
     pub fn sync_status(&self) -> Result<SyncStatus, StoreError> {
@@ -303,11 +310,15 @@ impl AuditRepository for RnovStore {
     }
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 struct RawRecord {
     namespace: String,
     key: String,
     value: Vec<u8>,
+    #[serde(default)]
+    chunk_count: usize,
+    #[serde(default)]
+    value_len: usize,
 }
 
 impl RawRecord {
@@ -316,11 +327,89 @@ impl RawRecord {
             namespace: namespace.to_string(),
             key: key.to_string(),
             value: value.to_vec(),
+            chunk_count: 0,
+            value_len: value.len(),
         }
+    }
+
+    fn chunked(namespace: &str, key: &str, value_len: usize, chunk_count: usize) -> Self {
+        Self {
+            namespace: namespace.to_string(),
+            key: key.to_string(),
+            value: Vec::new(),
+            chunk_count,
+            value_len,
+        }
+    }
+
+    fn deleted(&self) -> bool {
+        self.value.is_empty() && self.chunk_count == 0
+    }
+
+    fn chunked_value(&self) -> bool {
+        self.chunk_count > 0
     }
 }
 
-#[derive(Deserialize, Serialize)]
+fn records_for_value(namespace: &str, key: &str, value: &[u8]) -> Vec<RawRecord> {
+    let inline = RawRecord::new(namespace, key, value);
+    match record_fits(&inline) {
+        true => vec![inline],
+        false => chunked_records(namespace, key, value),
+    }
+}
+
+fn chunked_records(namespace: &str, key: &str, value: &[u8]) -> Vec<RawRecord> {
+    let mut records = value_chunks(namespace, key, value);
+    records.push(RawRecord::chunked(
+        namespace,
+        key,
+        value.len(),
+        records.len(),
+    ));
+    records
+}
+
+fn value_chunks(namespace: &str, key: &str, value: &[u8]) -> Vec<RawRecord> {
+    value
+        .chunks(CHUNK_VALUE_BYTES)
+        .enumerate()
+        .map(|(index, chunk)| {
+            RawRecord::new(
+                RECORD_CHUNK_NAMESPACE,
+                &chunk_key(namespace, key, index),
+                chunk,
+            )
+        })
+        .collect()
+}
+
+fn record_fits(record: &RawRecord) -> bool {
+    serde_json::to_vec(record)
+        .map(|encoded| encoded.len() <= PAGE_SIZE_BYTES - RECORD_HEADER_BYTES)
+        .unwrap_or(false)
+}
+
+fn chunk_key(namespace: &str, key: &str, index: usize) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(b"rnovemail:rnmdb:chunk:v1");
+    hasher.update(namespace.as_bytes());
+    hasher.update([0]);
+    hasher.update(key.as_bytes());
+    hasher.update([0]);
+    hasher.update(index.to_be_bytes());
+    digest_hex(&hasher.finalize())
+}
+
+fn digest_hex(bytes: &[u8]) -> String {
+    let mut value = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        let _ = write!(value, "{byte:02x}");
+    }
+    value
+}
+
+#[derive(Clone, Deserialize, Serialize)]
 struct StoreMeta {
     next_page_id: u64,
 }
@@ -381,9 +470,12 @@ fn write_record(
     backend: &SingleFileBackend,
     mut meta: StoreMeta,
     record: &RawRecord,
-) -> Result<(), StoreError> {
+) -> Result<StoreMeta, StoreError> {
     match find_record_page(backend, &meta, &record.namespace, &record.key)? {
-        Some(page_id) => write_raw_page(backend, page_id, record),
+        Some(page_id) => {
+            write_raw_page(backend, page_id, record)?;
+            Ok(meta)
+        }
         None => insert_record(backend, &mut meta, record),
     }
 }
@@ -392,10 +484,11 @@ fn insert_record(
     backend: &SingleFileBackend,
     meta: &mut StoreMeta,
     record: &RawRecord,
-) -> Result<(), StoreError> {
+) -> Result<StoreMeta, StoreError> {
     let page_id = meta.allocate_page()?;
     write_raw_page(backend, page_id, record)?;
-    write_meta_page(backend, meta)
+    write_meta_page(backend, meta)?;
+    Ok(meta.clone())
 }
 
 fn find_record(
@@ -437,17 +530,66 @@ fn append_matching_record(
     Ok(())
 }
 
-fn active_record(record: RawRecord) -> Option<(String, Vec<u8>)> {
-    match record.value.is_empty() {
-        true => None,
-        false => Some((record.key, record.value)),
+fn active_records(
+    backend: &SingleFileBackend,
+    meta: &StoreMeta,
+    records: Vec<RawRecord>,
+) -> Result<Vec<(String, Vec<u8>)>, StoreError> {
+    let mut active = Vec::new();
+    for record in records {
+        if let Some(value) = record_value(backend, meta, record.clone())? {
+            active.push((record.key, value));
+        }
+    }
+    Ok(active)
+}
+
+fn record_value(
+    backend: &SingleFileBackend,
+    meta: &StoreMeta,
+    record: RawRecord,
+) -> Result<Option<Vec<u8>>, StoreError> {
+    if record.deleted() {
+        return Ok(None);
+    }
+    match record.chunked_value() {
+        true => read_chunked_value(backend, meta, &record).map(Some),
+        false => Ok(Some(record.value)),
     }
 }
 
-fn record_value(record: RawRecord) -> Option<Vec<u8>> {
-    match record.value.is_empty() {
-        true => None,
-        false => Some(record.value),
+fn read_chunked_value(
+    backend: &SingleFileBackend,
+    meta: &StoreMeta,
+    record: &RawRecord,
+) -> Result<Vec<u8>, StoreError> {
+    let mut value = Vec::with_capacity(record.value_len);
+    for index in 0..record.chunk_count {
+        value.extend(read_value_chunk(backend, meta, record, index)?);
+    }
+    ensure_chunked_len(value.len(), record.value_len)?;
+    Ok(value)
+}
+
+fn read_value_chunk(
+    backend: &SingleFileBackend,
+    meta: &StoreMeta,
+    record: &RawRecord,
+    index: usize,
+) -> Result<Vec<u8>, StoreError> {
+    let key = chunk_key(&record.namespace, &record.key, index);
+    let chunk = find_record(backend, meta, RECORD_CHUNK_NAMESPACE, &key)?
+        .ok_or(StoreError::OperationFailed)?;
+    match chunk.chunked_value() || chunk.deleted() {
+        true => Err(StoreError::OperationFailed),
+        false => Ok(chunk.value),
+    }
+}
+
+fn ensure_chunked_len(actual: usize, expected: usize) -> Result<(), StoreError> {
+    match actual == expected {
+        true => Ok(()),
+        false => Err(StoreError::OperationFailed),
     }
 }
 

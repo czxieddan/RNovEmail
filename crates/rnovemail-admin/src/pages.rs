@@ -114,6 +114,34 @@ a { color: inherit; text-decoration: none; }
   gap: 8px;
   justify-content: flex-end;
 }
+.settings {
+  position: relative;
+}
+.settings summary {
+  list-style: none;
+}
+.settings summary::-webkit-details-marker {
+  display: none;
+}
+.settings-menu {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+  display: grid;
+  gap: 8px;
+  min-width: 180px;
+  padding: 10px;
+  position: absolute;
+  right: 0;
+  top: calc(100% + 8px);
+  z-index: 20;
+}
+.settings-menu .button,
+.settings-menu button {
+  justify-content: flex-start;
+  width: 100%;
+}
 .eyebrow {
   color: var(--blue);
   font-size: 12px;
@@ -207,6 +235,38 @@ button.secondary {
   padding: 18px;
 }
 .panel.accent { border-top: 3px solid var(--orange); }
+.mail-toolbar {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+.mail-toolbar p {
+  margin: 0;
+}
+.compose-panel {
+  display: none;
+}
+.compose-panel:target {
+  display: block;
+}
+.compose-heading {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+.message-subject {
+  display: grid;
+  gap: 4px;
+}
+.message-snippet {
+  margin: 0;
+  max-width: 54rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .form-grid {
   display: grid;
   gap: 14px;
@@ -280,7 +340,9 @@ button.secondary {
   .side { border-bottom: 1px solid var(--line); border-right: 0; }
   .main { padding: 20px; }
   .topbar { align-items: stretch; flex-direction: column; }
+  .settings-menu { left: 0; right: auto; }
   .actions,
+  .mail-toolbar,
   .form-grid,
   .grid,
   .row-form { grid-template-columns: 1fr; justify-content: stretch; }
@@ -289,12 +351,17 @@ button.secondary {
 "#;
 
 const ADMIN_JS: &str = r#"
+document.querySelectorAll("[data-draft-key]").forEach((form) => {
+  restoreDraft(form);
+  form.addEventListener("input", () => saveDraft(form));
+});
+
 document.querySelectorAll("[data-api-form]").forEach((form) => {
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     const status = form.querySelector("[data-form-status]");
-    status.textContent = "Saving";
-    status.dataset.state = "";
+    setStatus(status, "Saving", "");
+    if (form.dataset.draftKey) saveDraft(form);
 
     try {
       const method = form.dataset.method || "POST";
@@ -310,16 +377,26 @@ document.querySelectorAll("[data-api-form]").forEach((form) => {
         ...request
       });
       const text = await response.text();
-      status.textContent = response.ok ? "Saved" : text || response.statusText;
-      status.dataset.state = response.ok ? "ok" : "error";
+      if (response.status === 401) {
+        saveDraft(form);
+        redirectToLogin(form);
+        return;
+      }
+      setStatus(status, response.ok ? "Saved" : text || response.statusText, response.ok ? "ok" : "error");
+      if (response.ok) clearDraft(form);
       if (response.ok && form.dataset.reload === "true") location.reload();
       if (response.ok && form.dataset.reset !== "false") form.reset();
     } catch (error) {
-      status.textContent = "Request failed";
-      status.dataset.state = "error";
+      setStatus(status, "Request failed", "error");
     }
   });
 });
+
+function setStatus(status, text, state) {
+  if (!status) return;
+  status.textContent = text;
+  status.dataset.state = state;
+}
 
 function formPayload(form) {
   const payload = {};
@@ -335,6 +412,55 @@ function formPayload(form) {
 
 function splitList(value) {
   return value.split(",").map((item) => item.trim()).filter(Boolean);
+}
+
+function saveDraft(form) {
+  const key = form.dataset.draftKey;
+  if (!key) return;
+  localStorage.setItem(key, JSON.stringify(formPayload(form)));
+}
+
+function restoreDraft(form) {
+  const key = form.dataset.draftKey;
+  if (!key) return;
+  const raw = localStorage.getItem(key);
+  if (!raw) return;
+  const draft = safeJson(raw);
+  if (!draft) return;
+  Object.entries(draft).forEach(([name, value]) => setFieldValue(form, name, value));
+  if (!location.hash && Object.keys(draft).length > 0) location.hash = draftTarget(form);
+}
+
+function clearDraft(form) {
+  const key = form.dataset.draftKey;
+  if (key) localStorage.removeItem(key);
+}
+
+function safeJson(raw) {
+  try {
+    return JSON.parse(raw);
+  } catch (error) {
+    return null;
+  }
+}
+
+function setFieldValue(form, name, value) {
+  const field = form.elements.namedItem(name);
+  if (!field) return;
+  field.value = Array.isArray(value) ? value.join(", ") : value;
+}
+
+function draftTarget(form) {
+  const panel = form.closest(".compose-panel");
+  return panel ? panel.id : form.id;
+}
+
+function redirectToLogin(form) {
+  const scope = form.dataset.loginScope || "user";
+  const next = encodeURIComponent(location.pathname);
+  const lang = document.documentElement.lang || "zh";
+  const theme = document.documentElement.dataset.theme || "light";
+  location.href = `/login?scope=${scope}&next=${next}&lang=${lang}&theme=${theme}`;
 }
 "#;
 
@@ -384,9 +510,18 @@ pub fn portal_page(ctx: &PageContext, data: &PortalData) -> Markup {
         text(ctx.lang, Text::Portal),
         false,
         html! {
+            section class="panel mail-toolbar" {
+                div {
+                    h2 { (data.email) }
+                    p { (text(ctx.lang, Text::Mailboxes)) ": " (data.mailboxes.len()) }
+                }
+                a class="button" href="#compose" {
+                    (text(ctx.lang, Text::Compose))
+                }
+            }
             (compose_form(ctx, data))
-            section class="panel accent" {
-                h2 { (data.email) }
+            section class="panel" {
+                h2 { (text(ctx.lang, Text::Mailboxes)) }
                 div class="table-wrap" {
                     table class="table" {
                         thead {
@@ -461,9 +596,14 @@ pub fn portal_message_page(ctx: &PageContext, data: &crate::PortalMessageData) -
 
 fn compose_form(ctx: &PageContext, data: &PortalData) -> Markup {
     html! {
-        section class="panel accent" {
-            h2 { (text(ctx.lang, Text::Compose)) }
-            form class="form-grid" data-api-form="" data-reload="true" data-endpoint="/api/v1/portal/mail/send" {
+        section id="compose" class="panel accent compose-panel" {
+            div class="compose-heading" {
+                h2 { (text(ctx.lang, Text::Compose)) }
+                a class="button secondary" href=(localized_path(ctx, "/portal")) {
+                    (text(ctx.lang, Text::Back))
+                }
+            }
+            form id="portal-compose" class="form-grid" data-api-form="" data-reload="true" data-draft-key="portal-compose" data-login-scope="user" data-endpoint="/api/v1/portal/mail/send" {
                 label {
                     (text(ctx.lang, Text::From))
                     select name="from" {
@@ -514,8 +654,10 @@ fn message_table(
                                     @if inbound { (&message.from) } @else { (&message.to) }
                                 }
                                 td {
-                                    strong { (&message.subject) }
-                                    p { (&message.text) }
+                                    div class="message-subject" {
+                                        strong { (&message.subject) }
+                                        p class="message-snippet" { (&message.text) }
+                                    }
                                 }
                                 td { (message_status_text(ctx, &message.status)) }
                                 @if inbound {
@@ -954,11 +1096,7 @@ fn app_layout(ctx: &PageContext, title: &str, admin: bool, content: Markup) -> M
                             h1 { (title) }
                         }
                         div class="actions" {
-                            (language_links(ctx))
-                            (theme_link(ctx))
-                            form method="post" action="/logout" {
-                                button class="secondary" type="submit" { (text(ctx.lang, Text::Logout)) }
-                            }
+                            (settings_menu(ctx))
                         }
                     }
                     div class="stack" { (content) }
@@ -1001,6 +1139,21 @@ fn language_links(ctx: &PageContext) -> Markup {
     html! {
         a class="button secondary" href=(switch_lang(ctx, Lang::Zh)) { (text(ctx.lang, Text::LanguageZh)) }
         a class="button secondary" href=(switch_lang(ctx, Lang::Ja)) { (text(ctx.lang, Text::LanguageJa)) }
+    }
+}
+
+fn settings_menu(ctx: &PageContext) -> Markup {
+    html! {
+        details class="settings" {
+            summary class="button secondary" { (text(ctx.lang, Text::Settings)) }
+            div class="settings-menu" {
+                (language_links(ctx))
+                (theme_link(ctx))
+                form method="post" action="/logout" {
+                    button class="secondary" type="submit" { (text(ctx.lang, Text::Logout)) }
+                }
+            }
+        }
     }
 }
 

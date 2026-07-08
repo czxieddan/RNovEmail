@@ -1369,9 +1369,7 @@ fn cookie_value(cookie: &str) -> Option<&str> {
 }
 
 fn request_fingerprint(headers: &HeaderMap) -> String {
-    let user_agent = header_text(headers, "user-agent");
-    let forwarded_for = header_text(headers, "x-forwarded-for");
-    format!("{user_agent}|{forwarded_for}")
+    header_text(headers, "user-agent").to_string()
 }
 
 fn header_text<'a>(headers: &'a HeaderMap, name: &str) -> &'a str {

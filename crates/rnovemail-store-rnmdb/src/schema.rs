@@ -1,4 +1,6 @@
-pub const RNOVEMAIL_NAMESPACES: [&str; 13] = [
+pub const RECORD_CHUNK_NAMESPACE: &str = "__record_chunks";
+
+pub const RNOVEMAIL_NAMESPACES: [&str; 14] = [
     "users_by_id",
     "users_by_email",
     "domains_by_id",
@@ -12,4 +14,5 @@ pub const RNOVEMAIL_NAMESPACES: [&str; 13] = [
     "webhook_events_by_provider_event",
     "api_tokens_by_prefix",
     "audit_events_by_time",
+    RECORD_CHUNK_NAMESPACE,
 ];
