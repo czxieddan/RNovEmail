@@ -1,11 +1,14 @@
 use axum::{
     Json, Router,
-    extract::State,
+    extract::{Path, State},
     http::HeaderMap,
     response::{IntoResponse, Response},
     routing::{get, post},
 };
-use rnovemail_domain::{EmailAddress, MessageId, ProviderAccount, ProviderType};
+use rnovemail_domain::{
+    EmailAddress, InboundMessage, InboundMessageDetail, MessageId, OutboundMessage,
+    ProviderAccount, ProviderType,
+};
 use rnovemail_providers::SendMailRequest;
 use serde::{Deserialize, Serialize};
 
@@ -44,19 +47,26 @@ async fn send_portal_mail(
         .into_response()
 }
 
-async fn get_outbound(State(state): State<AppState>, headers: HeaderMap) -> Response {
-    token_accept(&state, headers, "outbound_visible")
-}
-
-async fn get_inbound(State(state): State<AppState>, headers: HeaderMap) -> Response {
-    token_accept(&state, headers, "inbound_visible")
-}
-
-fn token_accept(state: &AppState, headers: HeaderMap, accepted: &'static str) -> Response {
+async fn get_outbound(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Response {
     if let Err(rejection) = state.require_admin(&headers) {
         return rejection.into_response();
     }
-    axum::Json(serde_json::json!({ "status": accepted })).into_response()
+    outbound_response(&state, &id).into_response()
+}
+
+async fn get_inbound(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Response {
+    if let Err(rejection) = state.require_admin(&headers) {
+        return rejection.into_response();
+    }
+    inbound_response(&state, &id).await.into_response()
 }
 
 async fn send_mail_response(
@@ -108,6 +118,33 @@ struct SendMailResponse {
     provider_message_id: String,
 }
 
+#[derive(Serialize)]
+struct InboundMessageResponse {
+    id: String,
+    mailbox_id: String,
+    provider_account_id: Option<String>,
+    provider_event_id: String,
+    from: String,
+    subject: String,
+    text: String,
+    html: Option<String>,
+    received_at: String,
+    detail_available: bool,
+    detail_error: Option<&'static str>,
+    detail: Option<InboundMessageDetail>,
+}
+
+#[derive(Serialize)]
+struct OutboundMessageResponse {
+    id: String,
+    provider_account_id: String,
+    from: String,
+    to: Vec<String>,
+    subject: String,
+    text: String,
+    status: String,
+}
+
 impl SendMailResponse {
     fn sent(provider: ProviderAccount, receipt: rnovemail_providers::ProviderSendReceipt) -> Self {
         Self {
@@ -115,6 +152,63 @@ impl SendMailResponse {
             provider_type: provider_type_name(provider.provider_type()),
             message_id: receipt.message_id,
             provider_message_id: receipt.provider_message_id,
+        }
+    }
+}
+
+async fn inbound_response(
+    state: &AppState,
+    id: &str,
+) -> Result<Json<InboundMessageResponse>, ApiRejection> {
+    let view = state.inbound_message_view_by_id(id).await?;
+    Ok(Json(InboundMessageResponse::from_view(
+        view.message,
+        view.detail_error,
+    )))
+}
+
+fn outbound_response(
+    state: &AppState,
+    id: &str,
+) -> Result<Json<OutboundMessageResponse>, ApiRejection> {
+    let message = state.outbound_message_by_id(id)?;
+    Ok(Json(OutboundMessageResponse::from_message(message)))
+}
+
+impl InboundMessageResponse {
+    fn from_view(message: InboundMessage, detail_error: Option<&'static str>) -> Self {
+        let detail = message.detail.clone();
+        Self {
+            id: serialized_key(&message.id),
+            mailbox_id: serialized_key(&message.mailbox_id),
+            provider_account_id: message.provider_account_id.map(|id| serialized_key(&id)),
+            provider_event_id: message.provider_event_id,
+            from: message.from.as_str().to_string(),
+            subject: message.subject,
+            text: message.text,
+            html: detail.as_ref().and_then(|detail| detail.html.clone()),
+            received_at: message.received_at.to_rfc3339(),
+            detail_available: detail.is_some(),
+            detail_error,
+            detail,
+        }
+    }
+}
+
+impl OutboundMessageResponse {
+    fn from_message(message: OutboundMessage) -> Self {
+        Self {
+            id: serialized_key(&message.id),
+            provider_account_id: serialized_key(&message.provider_account_id),
+            from: message.from.as_str().to_string(),
+            to: message
+                .to
+                .iter()
+                .map(|email| email.as_str().to_string())
+                .collect(),
+            subject: message.subject,
+            text: message.text,
+            status: format!("{:?}", message.status),
         }
     }
 }
@@ -145,4 +239,11 @@ fn provider_type_name(provider_type: ProviderType) -> &'static str {
     match provider_type {
         ProviderType::Resend => "resend",
     }
+}
+
+fn serialized_key<T: serde::Serialize>(value: &T) -> String {
+    serde_json::to_value(value)
+        .ok()
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .unwrap_or_else(|| serde_json::to_string(value).unwrap_or_else(|_| "unknown".to_string()))
 }

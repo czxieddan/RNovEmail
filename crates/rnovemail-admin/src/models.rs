@@ -110,6 +110,8 @@ pub struct MessageDetailRow {
     pub subject: String,
     pub text: String,
     pub html: String,
+    pub detail_error: String,
+    pub detail_loaded: bool,
     pub received_at: String,
     pub headers: Vec<MessageHeaderRow>,
     pub attachments: Vec<MessageAttachmentRow>,

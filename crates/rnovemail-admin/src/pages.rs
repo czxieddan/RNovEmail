@@ -441,6 +441,7 @@ pub fn portal_message_page(ctx: &PageContext, data: &crate::PortalMessageData) -
             }
             (message_body_panel(ctx, Text::Body, &data.message.text))
             (message_body_panel(ctx, Text::Html, &data.message.html))
+            (message_body_status(ctx, &data.message))
             (headers_panel(ctx, &data.message.headers))
             (attachments_panel(ctx, &data.message.attachments))
             @if !data.message.raw_download_url.is_empty() {
@@ -554,6 +555,41 @@ fn message_body_panel(ctx: &PageContext, title: Text, value: &str) -> Markup {
                 pre class="message-body" { (value) }
             }
         },
+    }
+}
+
+fn message_body_status(ctx: &PageContext, message: &crate::MessageDetailRow) -> Markup {
+    if !message.text.is_empty() || !message.html.is_empty() {
+        return html! {};
+    }
+    html! {
+        section class="panel" {
+            h2 { (text(ctx.lang, Text::BodyUnavailable)) }
+            p class="status" data-state=(body_status_state(message)) {
+                (body_status_text(ctx, message))
+                @if !message.detail_error.is_empty() {
+                    " "
+                    code class="endpoint" { (&message.detail_error) }
+                }
+            }
+        }
+    }
+}
+
+fn body_status_state(message: &crate::MessageDetailRow) -> &'static str {
+    match message.detail_error.is_empty() && message.detail_loaded {
+        true => "",
+        false => "error",
+    }
+}
+
+fn body_status_text(ctx: &PageContext, message: &crate::MessageDetailRow) -> &'static str {
+    if !message.detail_error.is_empty() {
+        return text(ctx.lang, Text::DetailFetchFailed);
+    }
+    match message.detail_loaded {
+        true => text(ctx.lang, Text::ProviderDidNotReturnBody),
+        false => text(ctx.lang, Text::BodyUnavailable),
     }
 }
 

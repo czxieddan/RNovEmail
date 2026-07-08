@@ -72,6 +72,11 @@ struct InboundRecord {
     detail: Option<InboundMessageDetail>,
 }
 
+pub(crate) struct InboundMessageView {
+    pub message: InboundMessage,
+    pub detail_error: Option<&'static str>,
+}
+
 impl AppState {
     pub fn empty() -> Self {
         Self::new(None)
@@ -215,6 +220,14 @@ impl AppState {
         Ok(data.outbound_messages.values().cloned().collect())
     }
 
+    pub(crate) fn outbound_message_by_id(&self, id: &str) -> Result<OutboundMessage, ApiRejection> {
+        let data = self.read_data()?;
+        data.outbound_messages
+            .get(id)
+            .cloned()
+            .ok_or(ApiRejection::NotFound)
+    }
+
     pub(crate) fn list_inbound_messages(&self) -> Result<Vec<InboundMessage>, ApiRejection> {
         let data = self.read_data()?;
         Ok(data.inbound_messages.values().cloned().collect())
@@ -228,13 +241,24 @@ impl AppState {
             .ok_or(ApiRejection::NotFound)
     }
 
-    pub(crate) async fn hydrate_inbound_message_detail(
+    pub(crate) async fn inbound_message_view_by_id(
+        &self,
+        id: &str,
+    ) -> Result<InboundMessageView, ApiRejection> {
+        let message = self.inbound_message_by_id(id)?;
+        Ok(self.hydrate_inbound_message_view(message).await)
+    }
+
+    pub(crate) async fn hydrate_inbound_message_view(
         &self,
         message: InboundMessage,
-    ) -> InboundMessage {
+    ) -> InboundMessageView {
         match self.missing_inbound_detail(&message).await {
-            Ok(Some(detail)) => self.inbound_message_with_detail(message, detail).await,
-            _ => message,
+            Ok(Some(detail)) => {
+                InboundMessageView::ready(self.inbound_message_with_detail(message, detail).await)
+            }
+            Ok(None) => InboundMessageView::ready(message),
+            Err(error) => InboundMessageView::failed(message, error.code()),
         }
     }
 
@@ -973,6 +997,22 @@ impl AppState {
         let mut data = self.write_data()?;
         data.audit_events.push(event);
         Ok(())
+    }
+}
+
+impl InboundMessageView {
+    fn ready(message: InboundMessage) -> Self {
+        Self {
+            message,
+            detail_error: None,
+        }
+    }
+
+    fn failed(message: InboundMessage, detail_error: &'static str) -> Self {
+        Self {
+            message,
+            detail_error: Some(detail_error),
+        }
     }
 }
 

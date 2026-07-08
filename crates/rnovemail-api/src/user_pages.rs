@@ -99,10 +99,10 @@ async fn portal_message_data(
     let owned_mailboxes = owned_mailbox_lookup(&mailboxes, owner.id());
     let message = state.inbound_message_by_id(message_id)?;
     let mailbox = owned_message_mailbox(&message, &owned_mailboxes)?;
-    let message = state.hydrate_inbound_message_detail(message).await;
+    let view = state.hydrate_inbound_message_view(message).await;
     Ok(PortalMessageData {
         email: email.as_str().to_string(),
-        message: message_detail_row(message, mailbox),
+        message: message_detail_row(view.message, mailbox, view.detail_error),
     })
 }
 
@@ -193,7 +193,11 @@ fn owned_message_mailbox(
         .ok_or(ApiRejection::NotFound)
 }
 
-fn message_detail_row(message: InboundMessage, mailbox: String) -> MessageDetailRow {
+fn message_detail_row(
+    message: InboundMessage,
+    mailbox: String,
+    detail_error: Option<&str>,
+) -> MessageDetailRow {
     let detail = message.detail.as_ref();
     MessageDetailRow {
         mailbox: mailbox.clone(),
@@ -213,6 +217,8 @@ fn message_detail_row(message: InboundMessage, mailbox: String) -> MessageDetail
         html: detail
             .and_then(|detail| detail.html.clone())
             .unwrap_or_default(),
+        detail_error: detail_error.unwrap_or_default().to_string(),
+        detail_loaded: detail.is_some(),
         received_at: message.received_at.to_rfc3339(),
         headers: detail.map(header_rows).unwrap_or_default(),
         attachments: detail.map(attachment_rows).unwrap_or_default(),

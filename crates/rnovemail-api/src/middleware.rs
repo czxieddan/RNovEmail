@@ -27,31 +27,40 @@ pub enum ApiRejection {
 
 impl IntoResponse for ApiRejection {
     fn into_response(self) -> Response {
+        json_error(self.status(), self.code())
+    }
+}
+
+impl ApiRejection {
+    pub(crate) fn code(&self) -> &'static str {
         match self {
-            Self::MissingApiToken => json_error(StatusCode::UNAUTHORIZED, "missing_api_token"),
-            Self::InvalidApiToken => json_error(StatusCode::UNAUTHORIZED, "invalid_api_token"),
-            Self::BadRequest => json_error(StatusCode::BAD_REQUEST, "bad_request"),
-            Self::NotFound => json_error(StatusCode::NOT_FOUND, "not_found"),
-            Self::NoProviderForDomain => {
-                json_error(StatusCode::FORBIDDEN, "no_provider_for_domain")
+            Self::MissingApiToken => "missing_api_token",
+            Self::InvalidApiToken => "invalid_api_token",
+            Self::BadRequest => "bad_request",
+            Self::NotFound => "not_found",
+            Self::NoProviderForDomain => "no_provider_for_domain",
+            Self::ProviderApiKeyMissing => "provider_api_key_missing",
+            Self::ProviderRejected => "provider_rejected",
+            Self::MailboxAccessDenied => "mailbox_access_denied",
+            Self::InvalidWebhookSignature => "invalid_webhook_signature",
+            Self::DuplicateWebhookEvent => "duplicate_webhook_event",
+            Self::StateUnavailable => "state_unavailable",
+            Self::TooManyLoginAttempts => "too_many_login_attempts",
+        }
+    }
+
+    fn status(&self) -> StatusCode {
+        match self {
+            Self::MissingApiToken | Self::InvalidApiToken | Self::InvalidWebhookSignature => {
+                StatusCode::UNAUTHORIZED
             }
-            Self::ProviderApiKeyMissing => {
-                json_error(StatusCode::BAD_REQUEST, "provider_api_key_missing")
-            }
-            Self::ProviderRejected => json_error(StatusCode::BAD_GATEWAY, "provider_rejected"),
-            Self::MailboxAccessDenied => json_error(StatusCode::FORBIDDEN, "mailbox_access_denied"),
-            Self::InvalidWebhookSignature => {
-                json_error(StatusCode::UNAUTHORIZED, "invalid_webhook_signature")
-            }
-            Self::DuplicateWebhookEvent => {
-                json_error(StatusCode::CONFLICT, "duplicate_webhook_event")
-            }
-            Self::StateUnavailable => {
-                json_error(StatusCode::SERVICE_UNAVAILABLE, "state_unavailable")
-            }
-            Self::TooManyLoginAttempts => {
-                json_error(StatusCode::TOO_MANY_REQUESTS, "too_many_login_attempts")
-            }
+            Self::BadRequest | Self::ProviderApiKeyMissing => StatusCode::BAD_REQUEST,
+            Self::NotFound => StatusCode::NOT_FOUND,
+            Self::NoProviderForDomain | Self::MailboxAccessDenied => StatusCode::FORBIDDEN,
+            Self::ProviderRejected => StatusCode::BAD_GATEWAY,
+            Self::DuplicateWebhookEvent => StatusCode::CONFLICT,
+            Self::StateUnavailable => StatusCode::SERVICE_UNAVAILABLE,
+            Self::TooManyLoginAttempts => StatusCode::TOO_MANY_REQUESTS,
         }
     }
 }
