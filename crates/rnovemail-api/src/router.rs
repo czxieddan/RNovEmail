@@ -4,9 +4,10 @@ use std::{
 };
 
 use axum::{Json, Router, http::HeaderMap, response::Redirect, routing::get};
+use rnovemail_auth::verify_login_secret;
 use rnovemail_domain::{
     AuditActor, AuditEvent, AuditResult, DomainName, EmailAddress, Mailbox, ProviderAccount,
-    ProviderType, User, UserRole,
+    ProviderType, User, UserRole, UserStatus,
 };
 use rnovemail_providers::{MailProvider, ProviderEvent, ProviderWebhookRequest, ResendProvider};
 use rnovemail_store::{AppStore, StoreError};
@@ -14,9 +15,13 @@ use rnovemail_webhook::SignatureVerifier;
 use secrecy::{ExposeSecret, SecretString};
 use subtle::ConstantTimeEq;
 
+use crate::session::{SessionError, SessionPrincipal, SessionRegistry, SessionRole};
 use crate::{
-    admin_pages, admin_routes, mail_routes, middleware::ApiRejection, openapi, webhook_routes,
+    admin_pages, admin_routes, mail_routes, middleware::ApiRejection, openapi, session_routes,
+    user_pages, webhook_routes,
 };
+
+pub(crate) const SESSION_COOKIE: &str = "rnovemail_session";
 
 #[derive(Clone)]
 pub struct AppState {
@@ -28,6 +33,7 @@ struct AppStateInner {
     admin_token: Option<String>,
     store: Option<Arc<dyn AppStore>>,
     data: RwLock<AppData>,
+    sessions: RwLock<SessionRegistry>,
 }
 
 #[derive(Default)]
@@ -38,6 +44,7 @@ struct AppData {
     mailboxes: HashMap<String, Mailbox>,
     webhook_bindings: HashMap<String, WebhookBinding>,
     webhook_events: HashSet<String>,
+    audit_events: Vec<AuditEvent>,
 }
 
 #[derive(Clone)]
@@ -72,24 +79,143 @@ impl AppState {
     }
 
     pub(crate) fn require_admin(&self, headers: &HeaderMap) -> Result<(), ApiRejection> {
-        let presented = bearer_token(headers)?;
-        self.verify_admin_token(presented)
+        match optional_bearer_token(headers)? {
+            Some(token) => self.verify_admin_token(token),
+            None => self.admin_principal(headers).map(|_| ()),
+        }
     }
 
-    pub(crate) async fn add_user(
+    pub(crate) fn admin_principal(
+        &self,
+        headers: &HeaderMap,
+    ) -> Result<SessionPrincipal, ApiRejection> {
+        self.session_principal(headers, SessionRole::Admin)
+    }
+
+    pub(crate) fn user_principal(
+        &self,
+        headers: &HeaderMap,
+    ) -> Result<SessionPrincipal, ApiRejection> {
+        self.session_principal(headers, SessionRole::User)
+    }
+
+    pub(crate) fn create_session(
+        &self,
+        role: SessionRole,
+        subject: String,
+        headers: &HeaderMap,
+    ) -> Result<String, ApiRejection> {
+        self.write_sessions()
+            .map(|mut sessions| sessions.create(role, subject, request_fingerprint(headers)))
+    }
+
+    pub(crate) fn remove_session(&self, headers: &HeaderMap) -> Result<(), ApiRejection> {
+        let Some(session_id) = session_cookie(headers) else {
+            return Ok(());
+        };
+        self.write_sessions()?.remove(session_id);
+        Ok(())
+    }
+
+    pub(crate) fn ensure_login_allowed(&self, key: &str) -> Result<(), ApiRejection> {
+        match self.write_sessions()?.ensure_login_allowed(key) {
+            Ok(()) => Ok(()),
+            Err(SessionError::Locked) => Err(ApiRejection::TooManyLoginAttempts),
+            Err(_) => Err(ApiRejection::InvalidApiToken),
+        }
+    }
+
+    pub(crate) fn record_login_failure(&self, key: String) -> Result<(), ApiRejection> {
+        self.write_sessions()?.record_failure(key);
+        Ok(())
+    }
+
+    pub(crate) fn record_login_success(&self, key: &str) -> Result<(), ApiRejection> {
+        self.write_sessions()?.record_success(key);
+        Ok(())
+    }
+
+    pub(crate) fn verify_user_login(
+        &self,
+        email: &EmailAddress,
+        presented: &str,
+    ) -> Result<User, ApiRejection> {
+        let user = self.user_by_email(email)?;
+        ensure_active_user(&user)?;
+        let Some(hash) = user.login_secret_hash() else {
+            return Err(ApiRejection::InvalidApiToken);
+        };
+        verify_login_secret(hash, presented).map_err(|_| ApiRejection::InvalidApiToken)?;
+        Ok(user)
+    }
+
+    pub(crate) fn list_users(&self) -> Result<Vec<User>, ApiRejection> {
+        let data = self.read_data()?;
+        Ok(data.users.values().cloned().collect())
+    }
+
+    pub(crate) fn list_domains(&self) -> Result<Vec<DomainName>, ApiRejection> {
+        let data = self.read_data()?;
+        Ok(data.domains.iter().cloned().collect())
+    }
+
+    pub(crate) fn list_providers(&self) -> Result<Vec<ProviderAccount>, ApiRejection> {
+        let data = self.read_data()?;
+        Ok(data.providers.clone())
+    }
+
+    pub(crate) fn list_mailboxes(&self) -> Result<Vec<Mailbox>, ApiRejection> {
+        let data = self.read_data()?;
+        Ok(data.mailboxes.values().cloned().collect())
+    }
+
+    pub(crate) fn list_audit(&self) -> Result<Vec<AuditEvent>, ApiRejection> {
+        let data = self.read_data()?;
+        Ok(data.audit_events.clone())
+    }
+
+    pub(crate) async fn add_user_with_secret(
         &self,
         display_name: String,
         email: EmailAddress,
         roles: Vec<UserRole>,
+        login_secret_hash: Option<String>,
     ) -> Result<User, ApiRejection> {
-        let user = User::assign(display_name, email.clone(), roles);
+        let user = User::assign(display_name, email.clone(), roles)
+            .with_login_secret_hash(login_secret_hash);
+        self.persist_user(&user).await?;
+        self.insert_user(user.clone())?;
+        self.record_audit("admin.user.create", email.as_str())
+            .await?;
+        Ok(user)
+    }
+
+    pub(crate) async fn update_user(
+        &self,
+        email: &EmailAddress,
+        patch: UserPatch,
+    ) -> Result<User, ApiRejection> {
+        let mut user = self.user_by_email(email)?;
+        patch.apply(&mut user);
+        self.persist_user(&user).await?;
+        self.insert_user(user.clone())?;
+        self.record_audit("admin.user.update", email.as_str())
+            .await?;
+        Ok(user)
+    }
+
+    fn insert_user(&self, user: User) -> Result<(), ApiRejection> {
+        let mut data = self.write_data()?;
+        data.users
+            .insert(user.primary_email().as_str().to_string(), user);
+        Ok(())
+    }
+
+    async fn persist_user(&self, user: &User) -> Result<(), ApiRejection> {
         if let Some(store) = self.store() {
             store.put_user(user.clone()).await.map_err(store_error)?;
-            append_audit(store, "admin.user.create", email.as_str()).await?;
         }
-        let mut data = self.write_data()?;
-        data.users.insert(email.as_str().to_string(), user.clone());
-        Ok(user)
+        Ok(())
     }
 
     pub(crate) async fn add_domain(&self, domain: DomainName) -> Result<DomainName, ApiRejection> {
@@ -98,10 +224,13 @@ impl AppState {
                 .put_domain(domain.clone())
                 .await
                 .map_err(store_error)?;
-            append_audit(store, "admin.domain.create", domain.as_str()).await?;
         }
-        let mut data = self.write_data()?;
-        data.domains.insert(domain.clone());
+        {
+            let mut data = self.write_data()?;
+            data.domains.insert(domain.clone());
+        }
+        self.record_audit("admin.domain.create", domain.as_str())
+            .await?;
         Ok(domain)
     }
 
@@ -116,11 +245,32 @@ impl AppState {
                 .put_provider(provider.clone())
                 .await
                 .map_err(store_error)?;
-            append_audit(store, "admin.provider.create", &provider_key(&provider)).await?;
         }
-        let mut data = self.write_data()?;
-        insert_webhook_binding(&mut data, &provider, binding);
-        data.providers.push(provider.clone());
+        {
+            let mut data = self.write_data()?;
+            insert_webhook_binding(&mut data, &provider, binding);
+            data.providers.push(provider.clone());
+        }
+        self.record_audit("admin.provider.create", &provider_key(&provider))
+            .await?;
+        Ok(provider)
+    }
+
+    pub(crate) async fn update_provider(
+        &self,
+        id: &str,
+        patch: ProviderPatch,
+    ) -> Result<ProviderAccount, ApiRejection> {
+        let mut provider = self.provider_by_id(id)?;
+        patch.apply(&mut provider);
+        if let Some(store) = self.store() {
+            store
+                .put_provider(provider.clone())
+                .await
+                .map_err(store_error)?;
+        }
+        self.replace_provider(provider.clone())?;
+        self.record_audit("admin.provider.update", id).await?;
         Ok(provider)
     }
 
@@ -148,11 +298,33 @@ impl AppState {
                 .put_mailbox(mailbox.clone())
                 .await
                 .map_err(store_error)?;
-            append_audit(store, "admin.mailbox.create", mailbox_email.as_str()).await?;
         }
-        let mut data = self.write_data()?;
-        data.mailboxes
-            .insert(mailbox_email.as_str().to_string(), mailbox.clone());
+        {
+            let mut data = self.write_data()?;
+            data.mailboxes
+                .insert(mailbox_email.as_str().to_string(), mailbox.clone());
+        }
+        self.record_audit("admin.mailbox.create", mailbox_email.as_str())
+            .await?;
+        Ok(mailbox)
+    }
+
+    pub(crate) async fn update_mailbox(
+        &self,
+        email: &EmailAddress,
+        patch: MailboxPatch,
+    ) -> Result<Mailbox, ApiRejection> {
+        let mut mailbox = self.mailbox_by_email(email)?;
+        patch.apply(&mut mailbox);
+        if let Some(store) = self.store() {
+            store
+                .put_mailbox(mailbox.clone())
+                .await
+                .map_err(store_error)?;
+        }
+        self.insert_mailbox(mailbox.clone())?;
+        self.record_audit("admin.mailbox.update", email.as_str())
+            .await?;
         Ok(mailbox)
     }
 
@@ -175,6 +347,7 @@ impl AppState {
                 admin_token,
                 store: None,
                 data: RwLock::new(AppData::default()),
+                sessions: RwLock::new(SessionRegistry::default()),
             }),
         }
     }
@@ -190,6 +363,7 @@ impl AppState {
                 admin_token,
                 store,
                 data: RwLock::new(data),
+                sessions: RwLock::new(SessionRegistry::default()),
             }),
         }
     }
@@ -240,7 +414,7 @@ impl AppState {
         }
     }
 
-    fn verify_admin_token(&self, presented: &str) -> Result<(), ApiRejection> {
+    pub(crate) fn verify_admin_token(&self, presented: &str) -> Result<(), ApiRejection> {
         let Some(expected) = &self.inner.admin_token else {
             return Err(ApiRejection::InvalidApiToken);
         };
@@ -248,6 +422,61 @@ impl AppState {
             true => Ok(()),
             false => Err(ApiRejection::InvalidApiToken),
         }
+    }
+
+    fn session_principal(
+        &self,
+        headers: &HeaderMap,
+        role: SessionRole,
+    ) -> Result<SessionPrincipal, ApiRejection> {
+        let Some(session_id) = session_cookie(headers) else {
+            return Err(ApiRejection::MissingApiToken);
+        };
+        let fingerprint = request_fingerprint(headers);
+        self.write_sessions()?
+            .validate(session_id, role, &fingerprint)
+            .map_err(session_error)
+    }
+
+    fn user_by_email(&self, email: &EmailAddress) -> Result<User, ApiRejection> {
+        let data = self.read_data()?;
+        data.users
+            .get(email.as_str())
+            .cloned()
+            .ok_or(ApiRejection::NotFound)
+    }
+
+    fn provider_by_id(&self, id: &str) -> Result<ProviderAccount, ApiRejection> {
+        let data = self.read_data()?;
+        data.providers
+            .iter()
+            .find(|provider| provider_key(provider) == id)
+            .cloned()
+            .ok_or(ApiRejection::NotFound)
+    }
+
+    fn replace_provider(&self, provider: ProviderAccount) -> Result<(), ApiRejection> {
+        let mut data = self.write_data()?;
+        let key = provider_key(&provider);
+        data.providers
+            .retain(|candidate| provider_key(candidate) != key);
+        data.providers.push(provider);
+        Ok(())
+    }
+
+    fn mailbox_by_email(&self, email: &EmailAddress) -> Result<Mailbox, ApiRejection> {
+        let data = self.read_data()?;
+        data.mailboxes
+            .get(email.as_str())
+            .cloned()
+            .ok_or(ApiRejection::NotFound)
+    }
+
+    fn insert_mailbox(&self, mailbox: Mailbox) -> Result<(), ApiRejection> {
+        let mut data = self.write_data()?;
+        data.mailboxes
+            .insert(mailbox.address().as_str().to_string(), mailbox);
+        Ok(())
     }
 
     fn owner_id(
@@ -273,6 +502,98 @@ impl AppState {
             .data
             .write()
             .map_err(|_| ApiRejection::StateUnavailable)
+    }
+
+    fn write_sessions(
+        &self,
+    ) -> Result<std::sync::RwLockWriteGuard<'_, SessionRegistry>, ApiRejection> {
+        self.inner
+            .sessions
+            .write()
+            .map_err(|_| ApiRejection::StateUnavailable)
+    }
+
+    async fn record_audit(&self, action: &str, target: &str) -> Result<(), ApiRejection> {
+        let event = AuditEvent::new(
+            AuditActor::System,
+            action,
+            target,
+            "admin-api",
+            AuditResult::Accepted,
+        );
+        if let Some(store) = self.store() {
+            store
+                .append_audit(event.clone())
+                .await
+                .map_err(store_error)?;
+        }
+        let mut data = self.write_data()?;
+        data.audit_events.push(event);
+        Ok(())
+    }
+}
+
+pub(crate) struct UserPatch {
+    pub display_name: Option<String>,
+    pub roles: Option<Vec<UserRole>>,
+    pub status: Option<UserStatus>,
+    pub login_secret_hash: Option<String>,
+}
+
+impl UserPatch {
+    fn apply(self, user: &mut User) {
+        if let Some(display_name) = self.display_name {
+            user.set_display_name(display_name);
+        }
+        if let Some(roles) = self.roles {
+            user.set_roles(roles);
+        }
+        if let Some(status) = self.status {
+            user.set_status(status);
+        }
+        if let Some(hash) = self.login_secret_hash {
+            user.set_login_secret_hash(Some(hash));
+        }
+    }
+}
+
+pub(crate) struct ProviderPatch {
+    pub name: Option<String>,
+    pub domains: Option<Vec<DomainName>>,
+    pub enabled: Option<bool>,
+}
+
+impl ProviderPatch {
+    fn apply(self, provider: &mut ProviderAccount) {
+        if let Some(name) = self.name {
+            provider.set_name(name);
+        }
+        if let Some(domains) = self.domains {
+            provider.set_domains(domains);
+        }
+        if let Some(enabled) = self.enabled {
+            provider.set_enabled(enabled);
+        }
+    }
+}
+
+pub(crate) struct MailboxPatch {
+    pub status: Option<rnovemail_domain::MailboxStatus>,
+    pub inbound_enabled: Option<bool>,
+    pub outbound_enabled: Option<bool>,
+}
+
+impl MailboxPatch {
+    fn apply(self, mailbox: &mut Mailbox) {
+        if let Some(status) = self.status {
+            mailbox.set_status(status);
+        }
+        if let Some(enabled) = self.inbound_enabled {
+            mailbox.set_inbound_enabled(enabled);
+        }
+        if let Some(enabled) = self.outbound_enabled {
+            mailbox.set_outbound_enabled(enabled);
+        }
     }
 }
 
@@ -372,21 +693,6 @@ async fn remember_persistent_event(
     }
 }
 
-async fn append_audit(
-    store: Arc<dyn AppStore>,
-    action: &str,
-    target: &str,
-) -> Result<(), ApiRejection> {
-    let event = AuditEvent::new(
-        AuditActor::System,
-        action,
-        target,
-        "admin-api",
-        AuditResult::Accepted,
-    );
-    store.append_audit(event).await.map_err(store_error)
-}
-
 fn provider_event_id(event: &ProviderEvent) -> &str {
     match event {
         ProviderEvent::Delivered { provider_event_id }
@@ -411,6 +717,7 @@ async fn load_app_data(store: &dyn AppStore) -> Result<AppData, StoreError> {
     let domains = store.list_domains().await?;
     let providers = store.list_providers().await?;
     let mailboxes = store.list_mailboxes().await?;
+    let audit_events = store.list_audit().await?;
     Ok(AppData {
         users: keyed_users(users),
         domains: domains.into_iter().collect(),
@@ -418,6 +725,7 @@ async fn load_app_data(store: &dyn AppStore) -> Result<AppData, StoreError> {
         mailboxes: keyed_mailboxes(mailboxes),
         webhook_bindings: HashMap::new(),
         webhook_events: HashSet::new(),
+        audit_events,
     })
 }
 
@@ -446,6 +754,8 @@ pub fn build_router(state: AppState) -> Router {
         .route("/healthz", get(healthz))
         .route("/readyz", get(readyz))
         .merge(admin_pages::routes())
+        .merge(session_routes::routes())
+        .merge(user_pages::routes())
         .merge(admin_routes::routes())
         .merge(mail_routes::routes())
         .merge(webhook_routes::routes())
@@ -453,7 +763,7 @@ pub fn build_router(state: AppState) -> Router {
 }
 
 async fn root_redirect() -> Redirect {
-    Redirect::to("/admin")
+    Redirect::to("/portal")
 }
 
 async fn openapi_json() -> Json<utoipa::openapi::OpenApi> {
@@ -468,11 +778,59 @@ async fn readyz() -> &'static str {
     "ready"
 }
 
-fn bearer_token(headers: &HeaderMap) -> Result<&str, ApiRejection> {
-    let value = headers
-        .get("authorization")
-        .ok_or(ApiRejection::MissingApiToken)?;
+fn optional_bearer_token(headers: &HeaderMap) -> Result<Option<&str>, ApiRejection> {
+    let Some(value) = headers.get("authorization") else {
+        return Ok(None);
+    };
     let text = value.to_str().map_err(|_| ApiRejection::InvalidApiToken)?;
     text.strip_prefix("Bearer ")
+        .map(Some)
         .ok_or(ApiRejection::InvalidApiToken)
+}
+
+fn session_cookie(headers: &HeaderMap) -> Option<&str> {
+    headers
+        .get("cookie")
+        .and_then(|value| value.to_str().ok())
+        .and_then(find_session_cookie)
+}
+
+fn find_session_cookie(cookies: &str) -> Option<&str> {
+    cookies.split(';').find_map(cookie_value)
+}
+
+fn cookie_value(cookie: &str) -> Option<&str> {
+    let (name, value) = cookie.trim().split_once('=')?;
+    match name == SESSION_COOKIE {
+        true => Some(value),
+        false => None,
+    }
+}
+
+fn request_fingerprint(headers: &HeaderMap) -> String {
+    let user_agent = header_text(headers, "user-agent");
+    let forwarded_for = header_text(headers, "x-forwarded-for");
+    format!("{user_agent}|{forwarded_for}")
+}
+
+fn header_text<'a>(headers: &'a HeaderMap, name: &str) -> &'a str {
+    headers
+        .get(name)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("")
+}
+
+fn session_error(error: SessionError) -> ApiRejection {
+    match error {
+        SessionError::Locked => ApiRejection::TooManyLoginAttempts,
+        SessionError::Missing => ApiRejection::MissingApiToken,
+        SessionError::Invalid => ApiRejection::InvalidApiToken,
+    }
+}
+
+fn ensure_active_user(user: &User) -> Result<(), ApiRejection> {
+    match user.status() {
+        UserStatus::Active => Ok(()),
+        UserStatus::Disabled => Err(ApiRejection::InvalidApiToken),
+    }
 }

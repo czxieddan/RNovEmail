@@ -1312,6 +1312,9 @@ name = "rnovemail-api"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "base64",
+ "chrono",
+ "rand 0.8.6",
  "rnovemail-admin",
  "rnovemail-auth",
  "rnovemail-domain",

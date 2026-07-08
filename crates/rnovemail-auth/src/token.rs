@@ -87,3 +87,11 @@ fn verify_hash(hash: &str, secret: &str) -> Result<(), AuthError> {
         .verify_password(secret.as_bytes(), &parsed)
         .map_err(|_| AuthError::InvalidToken)
 }
+
+pub fn hash_login_secret(secret: &SecretString) -> Result<String, AuthError> {
+    hash_secret(secret.expose_secret())
+}
+
+pub fn verify_login_secret(hash: &str, presented: &str) -> Result<(), AuthError> {
+    verify_hash(hash, presented)
+}

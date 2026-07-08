@@ -5,9 +5,14 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{patch, post},
 };
-use rnovemail_domain::{DomainName, EmailAddress, ProviderAccount, ProviderType, UserRole};
+use rnovemail_auth::hash_login_secret;
+use rnovemail_domain::{
+    DomainName, EmailAddress, MailboxStatus, ProviderAccount, ProviderType, UserRole, UserStatus,
+};
+use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
 
+use crate::router::{MailboxPatch, ProviderPatch, UserPatch};
 use crate::{AppState, middleware::ApiRejection};
 
 pub fn routes() -> Router<AppState> {
@@ -39,9 +44,15 @@ async fn create_user(
 async fn update_user(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Path(_id): Path<String>,
+    Path(id): Path<String>,
+    Json(request): Json<UpdateUserRequest>,
 ) -> Response {
-    admin_accept(&state, headers, "user_updated")
+    if let Err(rejection) = state.require_admin(&headers) {
+        return rejection.into_response();
+    }
+    update_user_response(&state, id, request)
+        .await
+        .into_response()
 }
 
 async fn create_domain(
@@ -60,9 +71,18 @@ async fn create_domain(
 async fn update_domain(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Path(_id): Path<String>,
+    Path(id): Path<String>,
 ) -> Response {
-    admin_accept(&state, headers, "domain_updated")
+    if let Err(rejection) = state.require_admin(&headers) {
+        return rejection.into_response();
+    }
+    match DomainName::parse(id) {
+        Ok(domain) => Json(DomainResponse {
+            domain: domain.as_str().to_string(),
+        })
+        .into_response(),
+        Err(_) => ApiRejection::BadRequest.into_response(),
+    }
 }
 
 async fn create_provider(
@@ -81,9 +101,15 @@ async fn create_provider(
 async fn update_provider(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Path(_id): Path<String>,
+    Path(id): Path<String>,
+    Json(request): Json<UpdateProviderRequest>,
 ) -> Response {
-    admin_accept(&state, headers, "provider_updated")
+    if let Err(rejection) = state.require_admin(&headers) {
+        return rejection.into_response();
+    }
+    update_provider_response(&state, id, request)
+        .await
+        .into_response()
 }
 
 async fn create_mailbox(
@@ -102,16 +128,15 @@ async fn create_mailbox(
 async fn update_mailbox(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Path(_id): Path<String>,
+    Path(id): Path<String>,
+    Json(request): Json<UpdateMailboxRequest>,
 ) -> Response {
-    admin_accept(&state, headers, "mailbox_updated")
-}
-
-fn admin_accept(state: &AppState, headers: HeaderMap, accepted: &'static str) -> Response {
     if let Err(rejection) = state.require_admin(&headers) {
         return rejection.into_response();
     }
-    axum::Json(serde_json::json!({ "status": accepted })).into_response()
+    update_mailbox_response(&state, id, request)
+        .await
+        .into_response()
 }
 
 async fn create_user_response(
@@ -119,9 +144,31 @@ async fn create_user_response(
     request: CreateUserRequest,
 ) -> Result<Json<UserResponse>, ApiRejection> {
     let email = EmailAddress::parse(&request.email).map_err(|_| ApiRejection::BadRequest)?;
+    let login_secret_hash = login_secret_hash(request.login_secret)?;
     let user = state
-        .add_user(request.display_name, email, request.roles)
+        .add_user_with_secret(
+            request.display_name,
+            email,
+            request.roles,
+            login_secret_hash,
+        )
         .await?;
+    Ok(Json(UserResponse::from_user(&user)))
+}
+
+async fn update_user_response(
+    state: &AppState,
+    id: String,
+    request: UpdateUserRequest,
+) -> Result<Json<UserResponse>, ApiRejection> {
+    let email = EmailAddress::parse(id).map_err(|_| ApiRejection::BadRequest)?;
+    let patch = UserPatch {
+        display_name: request.display_name,
+        roles: request.roles,
+        status: request.status,
+        login_secret_hash: login_secret_hash(request.login_secret)?,
+    };
+    let user = state.update_user(&email, patch).await?;
     Ok(Json(UserResponse::from_user(&user)))
 }
 
@@ -147,6 +194,21 @@ async fn create_provider_response(
     Ok(Json(ProviderResponse::from_provider(&provider)))
 }
 
+async fn update_provider_response(
+    state: &AppState,
+    id: String,
+    request: UpdateProviderRequest,
+) -> Result<Json<ProviderResponse>, ApiRejection> {
+    let domains = optional_domains(request.domains)?;
+    let patch = ProviderPatch {
+        name: request.name,
+        domains,
+        enabled: request.enabled,
+    };
+    let provider = state.update_provider(&id, patch).await?;
+    Ok(Json(ProviderResponse::from_provider(&provider)))
+}
+
 async fn create_mailbox_response(
     state: &AppState,
     request: CreateMailboxRequest,
@@ -155,6 +217,23 @@ async fn create_mailbox_response(
     let mailbox =
         EmailAddress::parse(&request.mailbox_email).map_err(|_| ApiRejection::BadRequest)?;
     let mailbox = state.add_mailbox(owner, mailbox).await?;
+    Ok(Json(MailboxResponse {
+        email: mailbox.address().as_str().to_string(),
+    }))
+}
+
+async fn update_mailbox_response(
+    state: &AppState,
+    id: String,
+    request: UpdateMailboxRequest,
+) -> Result<Json<MailboxResponse>, ApiRejection> {
+    let email = EmailAddress::parse(id).map_err(|_| ApiRejection::BadRequest)?;
+    let patch = MailboxPatch {
+        status: request.status,
+        inbound_enabled: request.inbound_enabled,
+        outbound_enabled: request.outbound_enabled,
+    };
+    let mailbox = state.update_mailbox(&email, patch).await?;
     Ok(Json(MailboxResponse {
         email: mailbox.address().as_str().to_string(),
     }))
@@ -174,12 +253,33 @@ fn parse_domains(values: Vec<String>) -> Result<Vec<DomainName>, ApiRejection> {
         .collect()
 }
 
+fn optional_domains(values: Option<Vec<String>>) -> Result<Option<Vec<DomainName>>, ApiRejection> {
+    values.map(parse_domains).transpose()
+}
+
+fn login_secret_hash(secret: Option<String>) -> Result<Option<String>, ApiRejection> {
+    secret
+        .filter(|value| !value.trim().is_empty())
+        .map(|value| hash_login_secret(&SecretString::new(value)))
+        .transpose()
+        .map_err(|_| ApiRejection::BadRequest)
+}
+
 #[derive(Deserialize)]
 struct CreateUserRequest {
     display_name: String,
     email: String,
     #[serde(default)]
     roles: Vec<UserRole>,
+    login_secret: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct UpdateUserRequest {
+    display_name: Option<String>,
+    roles: Option<Vec<UserRole>>,
+    status: Option<UserStatus>,
+    login_secret: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -196,9 +296,23 @@ struct CreateProviderRequest {
 }
 
 #[derive(Deserialize)]
+struct UpdateProviderRequest {
+    name: Option<String>,
+    domains: Option<Vec<String>>,
+    enabled: Option<bool>,
+}
+
+#[derive(Deserialize)]
 struct CreateMailboxRequest {
     owner_email: String,
     mailbox_email: String,
+}
+
+#[derive(Deserialize)]
+struct UpdateMailboxRequest {
+    status: Option<MailboxStatus>,
+    inbound_enabled: Option<bool>,
+    outbound_enabled: Option<bool>,
 }
 
 #[derive(Serialize)]

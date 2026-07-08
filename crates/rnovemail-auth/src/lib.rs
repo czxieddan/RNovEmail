@@ -6,4 +6,4 @@ mod token;
 pub use errors::AuthError;
 pub use rbac::{Scope, ScopeSet};
 pub use secrets::{EncryptedSecret, SecretBox};
-pub use token::{ApiToken, ApiTokenHash, TokenGenerator};
+pub use token::{ApiToken, ApiTokenHash, TokenGenerator, hash_login_secret, verify_login_secret};

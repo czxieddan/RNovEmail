@@ -69,4 +69,16 @@ impl Mailbox {
     pub fn outbound_enabled(&self) -> bool {
         self.outbound_enabled
     }
+
+    pub fn set_status(&mut self, status: MailboxStatus) {
+        self.status = status;
+    }
+
+    pub fn set_inbound_enabled(&mut self, enabled: bool) {
+        self.inbound_enabled = enabled;
+    }
+
+    pub fn set_outbound_enabled(&mut self, enabled: bool) {
+        self.outbound_enabled = enabled;
+    }
 }

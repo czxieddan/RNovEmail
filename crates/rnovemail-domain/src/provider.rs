@@ -55,11 +55,31 @@ impl ProviderAccount {
         self.provider_type
     }
 
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
     pub fn serves_domain(&self, domain: &DomainName) -> bool {
         self.enabled && self.domains.iter().any(|candidate| candidate == domain)
     }
 
     pub fn domains(&self) -> &[DomainName] {
         &self.domains
+    }
+
+    pub fn enabled(&self) -> bool {
+        self.enabled
+    }
+
+    pub fn set_name(&mut self, name: String) {
+        self.name = name;
+    }
+
+    pub fn set_domains(&mut self, domains: Vec<DomainName>) {
+        self.domains = domains;
+    }
+
+    pub fn set_enabled(&mut self, enabled: bool) {
+        self.enabled = enabled;
     }
 }

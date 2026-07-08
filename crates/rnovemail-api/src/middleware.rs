@@ -19,6 +19,7 @@ pub enum ApiRejection {
     InvalidWebhookSignature,
     DuplicateWebhookEvent,
     StateUnavailable,
+    TooManyLoginAttempts,
 }
 
 impl IntoResponse for ApiRejection {
@@ -39,6 +40,9 @@ impl IntoResponse for ApiRejection {
             }
             Self::StateUnavailable => {
                 json_error(StatusCode::SERVICE_UNAVAILABLE, "state_unavailable")
+            }
+            Self::TooManyLoginAttempts => {
+                json_error(StatusCode::TOO_MANY_REQUESTS, "too_many_login_attempts")
             }
         }
     }

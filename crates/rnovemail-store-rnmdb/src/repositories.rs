@@ -272,6 +272,10 @@ impl AuditRepository for RnovStore {
         let key = audit_key(&event);
         put_typed(self, "audit_events_by_time", &key, &event)
     }
+
+    async fn list_audit(&self) -> Result<Vec<AuditEvent>, StoreError> {
+        list_typed(self, "audit_events_by_time")
+    }
 }
 
 #[derive(Deserialize, Serialize)]

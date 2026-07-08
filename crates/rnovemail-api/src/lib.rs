@@ -4,6 +4,9 @@ mod mail_routes;
 mod middleware;
 mod openapi;
 mod router;
+mod session;
+mod session_routes;
+mod user_pages;
 mod webhook_routes;
 
 pub use openapi::{ApiDoc, openapi};

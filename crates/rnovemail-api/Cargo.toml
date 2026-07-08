@@ -7,6 +7,9 @@ version.workspace = true
 
 [dependencies]
 axum.workspace = true
+base64.workspace = true
+chrono.workspace = true
+rand.workspace = true
 rnovemail-admin = { path = "../rnovemail-admin" }
 rnovemail-auth = { path = "../rnovemail-auth" }
 rnovemail-domain = { path = "../rnovemail-domain" }

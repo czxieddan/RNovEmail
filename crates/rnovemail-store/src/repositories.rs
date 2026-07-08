@@ -53,6 +53,7 @@ pub trait TokenRepository: Send + Sync {
 #[async_trait]
 pub trait AuditRepository: Send + Sync {
     async fn append_audit(&self, event: AuditEvent) -> Result<(), StoreError>;
+    async fn list_audit(&self) -> Result<Vec<AuditEvent>, StoreError>;
 }
 
 pub trait AppStore:
