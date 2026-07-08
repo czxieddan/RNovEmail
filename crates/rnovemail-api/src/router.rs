@@ -36,6 +36,7 @@ struct AppStateInner {
     admin_token: Option<String>,
     store: Option<Arc<dyn AppStore>>,
     data: RwLock<AppData>,
+    public_base_url: RwLock<Option<String>>,
     resend_endpoint: RwLock<String>,
     sessions: RwLock<SessionRegistry>,
 }
@@ -69,6 +70,13 @@ impl AppState {
     pub fn with_resend_endpoint(self, endpoint: impl Into<String>) -> Self {
         if let Ok(mut value) = self.inner.resend_endpoint.write() {
             *value = endpoint.into();
+        }
+        self
+    }
+
+    pub fn with_public_base_url(self, base_url: impl Into<String>) -> Self {
+        if let Ok(mut value) = self.inner.public_base_url.write() {
+            *value = normalize_public_base_url(base_url.into());
         }
         self
     }
@@ -173,6 +181,14 @@ impl AppState {
     pub(crate) fn list_providers(&self) -> Result<Vec<ProviderAccount>, ApiRejection> {
         let data = self.read_data()?;
         Ok(data.providers.clone())
+    }
+
+    pub(crate) fn public_base_url(&self) -> Result<Option<String>, ApiRejection> {
+        self.inner
+            .public_base_url
+            .read()
+            .map(|value| value.clone())
+            .map_err(|_| ApiRejection::StateUnavailable)
     }
 
     pub(crate) fn list_mailboxes(&self) -> Result<Vec<Mailbox>, ApiRejection> {
@@ -421,6 +437,7 @@ impl AppState {
                 admin_token,
                 store: None,
                 data: RwLock::new(AppData::default()),
+                public_base_url: RwLock::new(None),
                 resend_endpoint: RwLock::new(default_resend_endpoint()),
                 sessions: RwLock::new(SessionRegistry::default()),
             }),
@@ -438,6 +455,7 @@ impl AppState {
                 admin_token,
                 store,
                 data: RwLock::new(data),
+                public_base_url: RwLock::new(None),
                 resend_endpoint: RwLock::new(default_resend_endpoint()),
                 sessions: RwLock::new(SessionRegistry::default()),
             }),
@@ -918,6 +936,14 @@ fn provider_error(error: ProviderError) -> ApiRejection {
 
 fn default_resend_endpoint() -> String {
     "https://api.resend.com".to_string()
+}
+
+fn normalize_public_base_url(value: String) -> Option<String> {
+    let trimmed = value.trim().trim_end_matches('/');
+    match trimmed.is_empty() {
+        true => None,
+        false => Some(trimmed.to_string()),
+    }
 }
 
 pub fn build_router(state: AppState) -> Router {

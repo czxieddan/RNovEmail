@@ -36,6 +36,7 @@ async fn build_state(config: &AppConfig) -> anyhow::Result<AppState> {
         .map(|token| token.expose_secret().to_string());
     AppState::with_persistent_store(token, store)
         .await
+        .map(|state| state.with_public_base_url(config.http.public_base_url.as_str()))
         .map_err(Into::into)
 }
 

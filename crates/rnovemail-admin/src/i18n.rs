@@ -33,12 +33,15 @@ pub enum Text {
     Outbound,
     Password,
     Portal,
+    ProviderId,
     Providers,
     Roles,
     Save,
+    SecretConfiguredHint,
     Status,
     Theme,
     Users,
+    WebhookEndpoint,
     WebhookSecret,
 }
 
@@ -94,12 +97,15 @@ fn zh(key: Text) -> &'static str {
         Text::Outbound => "出站",
         Text::Password => "密钥",
         Text::Portal => "用户门户",
+        Text::ProviderId => "Provider ID",
         Text::Providers => "服务商",
         Text::Roles => "角色",
         Text::Save => "保存",
+        Text::SecretConfiguredHint => "已配置，留空不变",
         Text::Status => "状态",
         Text::Theme => "主题",
         Text::Users => "用户",
+        Text::WebhookEndpoint => "Webhook Endpoint",
         Text::WebhookSecret => "Webhook 密钥",
     }
 }
@@ -133,12 +139,15 @@ fn ja(key: Text) -> &'static str {
         Text::Outbound => "送信",
         Text::Password => "シークレット",
         Text::Portal => "ユーザーポータル",
+        Text::ProviderId => "Provider ID",
         Text::Providers => "プロバイダー",
         Text::Roles => "ロール",
         Text::Save => "保存",
+        Text::SecretConfiguredHint => "設定済み、空欄なら変更なし",
         Text::Status => "状態",
         Text::Theme => "テーマ",
         Text::Users => "ユーザー",
+        Text::WebhookEndpoint => "Webhook Endpoint",
         Text::WebhookSecret => "Webhook シークレット",
     }
 }

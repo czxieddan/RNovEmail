@@ -90,19 +90,23 @@ fn admin_response(
         return Redirect::to(&login_location(section)).into_response();
     }
     let ctx = page_context(&query, section_path(section));
-    match admin_data(&state) {
+    let base_url = match webhook_base_url(&state, &headers) {
+        Ok(value) => value,
+        Err(error) => return error.into_response(),
+    };
+    match admin_data(&state, &base_url) {
         Ok(data) => rnovemail_admin::admin_page(&ctx, section, &data).into_response(),
         Err(error) => error.into_response(),
     }
 }
 
-fn admin_data(state: &AppState) -> Result<AdminData, ApiRejection> {
+fn admin_data(state: &AppState, base_url: &str) -> Result<AdminData, ApiRejection> {
     let users = state.list_users()?;
     let owners = owner_lookup(&users);
     Ok(AdminData {
         users: user_rows(users),
         domains: domain_rows(state)?,
-        providers: provider_rows(state)?,
+        providers: provider_rows(state, base_url)?,
         mailboxes: mailbox_rows(state.list_mailboxes()?, &owners),
         audit_events: audit_rows(state)?,
     })
@@ -136,20 +140,22 @@ fn domain_rows(state: &AppState) -> Result<Vec<DomainRow>, ApiRejection> {
     ))
 }
 
-fn provider_rows(state: &AppState) -> Result<Vec<ProviderRow>, ApiRejection> {
+fn provider_rows(state: &AppState, base_url: &str) -> Result<Vec<ProviderRow>, ApiRejection> {
     Ok(sorted(
         state
             .list_providers()?
             .into_iter()
-            .map(provider_row)
+            .map(|provider| provider_row(provider, base_url))
             .collect(),
         |row| row.name.clone(),
     ))
 }
 
-fn provider_row(provider: ProviderAccount) -> ProviderRow {
+fn provider_row(provider: ProviderAccount, base_url: &str) -> ProviderRow {
+    let id = serialized_key(&provider.id());
     ProviderRow {
-        id: serialized_key(&provider.id()),
+        webhook_endpoint: webhook_endpoint(base_url, provider.provider_type(), &id),
+        id,
         name: provider.name().to_string(),
         provider_type: provider_type(provider.provider_type()).to_string(),
         domains: provider
@@ -161,6 +167,51 @@ fn provider_row(provider: ProviderAccount) -> ProviderRow {
         enabled: provider.enabled(),
         api_key_configured: provider.api_key_configured(),
     }
+}
+
+fn webhook_base_url(state: &AppState, headers: &HeaderMap) -> Result<String, ApiRejection> {
+    match state.public_base_url()? {
+        Some(value) => Ok(value),
+        None => Ok(request_base_url(headers)),
+    }
+}
+
+fn request_base_url(headers: &HeaderMap) -> String {
+    format!("{}://{}", request_scheme(headers), request_host(headers))
+}
+
+fn request_scheme(headers: &HeaderMap) -> &'static str {
+    match optional_header(headers, "x-forwarded-proto") {
+        Some(value) if value.eq_ignore_ascii_case("https") => "https",
+        _ => "http",
+    }
+}
+
+fn request_host(headers: &HeaderMap) -> &str {
+    optional_header(headers, "x-forwarded-host")
+        .or_else(|| optional_header(headers, "host"))
+        .unwrap_or("localhost:18089")
+}
+
+fn optional_header<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
+    headers
+        .get(name)
+        .and_then(|value| value.to_str().ok())
+        .map(first_header_value)
+        .filter(|value| !value.is_empty())
+}
+
+fn first_header_value(value: &str) -> &str {
+    value.split(',').next().unwrap_or(value).trim()
+}
+
+fn webhook_endpoint(base_url: &str, kind: ProviderType, provider_id: &str) -> String {
+    format!(
+        "{}/api/v1/webhooks/{}/{}",
+        base_url,
+        provider_type(kind),
+        provider_id
+    )
 }
 
 fn mailbox_rows(mailboxes: Vec<Mailbox>, owners: &HashMap<UserId, String>) -> Vec<MailboxRow> {

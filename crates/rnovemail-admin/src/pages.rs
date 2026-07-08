@@ -247,6 +247,18 @@ button.secondary {
   display: grid;
   gap: 8px;
 }
+.record-meta {
+  color: var(--muted);
+  display: grid;
+  gap: 6px;
+}
+.record-meta p { margin: 0; overflow-wrap: anywhere; }
+.record-meta strong { color: var(--ink); margin-right: 6px; }
+.endpoint {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
 @media (max-width: 900px) {
   .shell { grid-template-columns: 1fr; }
   .side { border-bottom: 1px solid var(--line); border-right: 0; }
@@ -544,6 +556,16 @@ fn create_provider_form(ctx: &PageContext) -> Markup {
 fn provider_update_form(ctx: &PageContext, provider: &crate::ProviderRow) -> Markup {
     html! {
         div class="row-actions" {
+            div class="record-meta" {
+                p {
+                    strong { (text(ctx.lang, Text::ProviderId)) }
+                    code class="endpoint" { (&provider.id) }
+                }
+                p {
+                    strong { (text(ctx.lang, Text::WebhookEndpoint)) }
+                    code class="endpoint" { (&provider.webhook_endpoint) }
+                }
+            }
             form class="row-form" data-api-form="" data-reset="false" data-reload="true" data-method="PATCH" data-endpoint=(format!("/api/v1/admin/provider-accounts/{}", provider.id)) {
                 input name="name" value=(&provider.name);
                 input name="domains" value=(&provider.domains);
@@ -551,7 +573,7 @@ fn provider_update_form(ctx: &PageContext, provider: &crate::ProviderRow) -> Mar
                     option value="true" selected[provider.enabled] { (text(ctx.lang, Text::Enabled)) }
                     option value="false" selected[!provider.enabled] { (text(ctx.lang, Text::Disabled)) }
                 }
-                input name="api_key" type="password" placeholder=(text(ctx.lang, Text::ApiKey));
+                input name="api_key" type="password" placeholder=(secret_placeholder(ctx, provider.api_key_configured));
                 input name="webhook_secret" type="password" placeholder=(text(ctx.lang, Text::WebhookSecret));
                 span class="status" {
                     (text(ctx.lang, Text::ApiKey)) ": "
@@ -566,6 +588,13 @@ fn provider_update_form(ctx: &PageContext, provider: &crate::ProviderRow) -> Mar
             }
             (delete_form(ctx, &format!("/api/v1/admin/provider-accounts/{}", provider.id)))
         }
+    }
+}
+
+fn secret_placeholder(ctx: &PageContext, configured: bool) -> &'static str {
+    match configured {
+        true => text(ctx.lang, Text::SecretConfiguredHint),
+        false => text(ctx.lang, Text::ApiKey),
     }
 }
 

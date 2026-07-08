@@ -51,6 +51,7 @@ pub struct ProviderRow {
     pub name: String,
     pub provider_type: String,
     pub domains: String,
+    pub webhook_endpoint: String,
     pub enabled: bool,
     pub api_key_configured: bool,
 }
