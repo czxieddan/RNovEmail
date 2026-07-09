@@ -103,6 +103,7 @@ pub struct PortalMessageData {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MessageDetailRow {
+    pub direction: String,
     pub mailbox: String,
     pub provider_id: String,
     pub status: String,
@@ -121,6 +122,7 @@ pub struct MessageDetailRow {
     pub attachments: Vec<MessageAttachmentRow>,
     pub raw_download_url: String,
     pub raw_expires_at: String,
+    pub starred: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

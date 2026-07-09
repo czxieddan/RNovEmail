@@ -283,7 +283,7 @@ button.secondary {
   border-bottom: 1px solid var(--line);
   display: grid;
   gap: 18px;
-  grid-template-columns: auto auto minmax(220px, 560px) auto auto;
+  grid-template-columns: auto minmax(240px, 560px) auto auto auto;
   min-height: 56px;
   padding: 0 16px;
   position: sticky;
@@ -297,6 +297,17 @@ button.secondary {
   font-weight: 800;
   gap: 8px;
   min-width: 150px;
+}
+.mail-search {
+  justify-self: start;
+  max-width: 560px;
+  width: 100%;
+}
+.mail-search input {
+  background: var(--bg);
+  border-radius: 999px;
+  min-height: 38px;
+  padding: 8px 16px;
 }
 .mail-nav-group {
   align-items: center;
@@ -318,17 +329,6 @@ button.secondary {
 .mail-compose-link:focus {
   color: var(--blue);
   outline: none;
-}
-.mail-search {
-  justify-self: center;
-  max-width: 560px;
-  width: 100%;
-}
-.mail-search input {
-  background: var(--bg);
-  border-radius: 999px;
-  min-height: 38px;
-  padding: 8px 16px;
 }
 .mail-compose-link {
   color: var(--blue);
@@ -628,6 +628,10 @@ button.secondary {
   gap: 12px;
   min-height: 40px;
 }
+.message-toolbar form {
+  display: inline-flex;
+  margin: 0;
+}
 .message-toolbar-spacer {
   border-left: 1px solid var(--line);
   height: 22px;
@@ -726,6 +730,8 @@ const ADMIN_JS: &str = r##"
 setupMailPanes();
 setupDraftActions();
 setupMailSearch();
+setupDetailToggles();
+setupReplyActions();
 
 document.querySelectorAll("[data-draft-key]").forEach((form) => {
   restoreDraft(form);
@@ -760,6 +766,10 @@ document.querySelectorAll("[data-api-form]").forEach((form) => {
       }
       setStatus(status, response.ok ? "Saved" : text || response.statusText, response.ok ? "ok" : "error");
       if (response.ok) clearDraft(form);
+      if (response.ok && form.dataset.redirect) {
+        location.href = form.dataset.redirect;
+        return;
+      }
       if (response.ok && form.dataset.reload === "true") location.reload();
       if (response.ok && form.dataset.reset !== "false") form.reset();
     } catch (error) {
@@ -865,12 +875,81 @@ function setupMailSearch() {
   const search = document.querySelector("[data-mail-search]");
   if (!search) return;
   search.addEventListener("input", () => {
-    const query = search.value.trim().toLocaleLowerCase();
+    const query = search.value;
     document.querySelectorAll("[data-search-text]").forEach((row) => {
       const value = row.dataset.searchText || "";
-      row.hidden = query.length > 0 && !value.toLocaleLowerCase().includes(query);
+      row.hidden = !mailSearchMatches(query, value);
     });
   });
+}
+
+function mailSearchMatches(query, value) {
+  const terms = searchTerms(query);
+  if (terms.length === 0) return true;
+  const haystack = normalizeSearchText(value);
+  return terms.every((term) => haystack.includes(term) || fuzzyMailMatch(term, haystack));
+}
+
+function searchTerms(value) {
+  return normalizeSearchText(value).split(" ").filter(Boolean);
+}
+
+function normalizeSearchText(value) {
+  const text = String(value || "");
+  const normalized = text.normalize ? text.normalize("NFKC") : text;
+  return normalized.toLocaleLowerCase().replace(/[\u3000\s]+/g, " ").trim();
+}
+
+function fuzzyMailMatch(term, haystack) {
+  let offset = 0;
+  for (const char of term) {
+    const found = haystack.indexOf(char, offset);
+    if (found === -1) return false;
+    offset = found + char.length;
+  }
+  return true;
+}
+
+function setupDetailToggles() {
+  document.querySelectorAll("[data-toggle-details]").forEach((button) => {
+    button.addEventListener("click", () => openMessageDetails(button));
+  });
+}
+
+function openMessageDetails(button) {
+  const details = document.getElementById(button.dataset.toggleDetails);
+  if (!details) return;
+  details.open = true;
+  details.scrollIntoView({ block: "start", behavior: "smooth" });
+}
+
+function setupReplyActions() {
+  document.querySelectorAll("[data-reply-action]").forEach((button) => {
+    button.addEventListener("click", () => startReply(button));
+  });
+}
+
+function startReply(button) {
+  localStorage.setItem("portal-compose", JSON.stringify(replyDraft(button)));
+  location.href = button.dataset.replyHref || "/portal#compose";
+}
+
+function replyDraft(button) {
+  return compactDraft({
+    from: button.dataset.replyFrom || "",
+    to: splitList(button.dataset.replyTo || ""),
+    subject: button.dataset.replySubject || "",
+    text: button.dataset.replyBody || ""
+  });
+}
+
+function compactDraft(draft) {
+  return Object.fromEntries(Object.entries(draft).filter(([, value]) => draftValuePresent(value)));
+}
+
+function draftValuePresent(value) {
+  if (Array.isArray(value)) return value.length > 0;
+  return String(value).trim().length > 0;
 }
 
 function handleDraftAction(button) {
@@ -981,8 +1060,11 @@ pub fn portal_message_page(ctx: &PageContext, data: &crate::PortalMessageData) -
                     a class="mail-action-icon" href=(localized_path(ctx, "/portal")) aria-label=(text(ctx.lang, Text::Back)) title=(text(ctx.lang, Text::Back)) {
                         (back_icon())
                     }
+                    (delete_detail_form(ctx, &data.message))
+                    (favorite_detail_form(ctx, &data.message))
+                    (reply_detail_button(ctx, &data.message))
                     span class="message-toolbar-spacer" {}
-                    a class="mail-action-icon" href="#message-details" title=(text(ctx.lang, Text::Details)) aria-label=(text(ctx.lang, Text::Details)) {
+                    button class="mail-action-icon" type="button" data-toggle-details="message-details" title=(text(ctx.lang, Text::Details)) aria-label=(text(ctx.lang, Text::Details)) {
                         (mail_icon())
                     }
                 }
@@ -1113,6 +1195,41 @@ fn delete_message_form(ctx: &PageContext, message: &crate::MessageRow, inbound: 
     }
 }
 
+fn favorite_detail_form(ctx: &PageContext, message: &crate::MessageDetailRow) -> Markup {
+    let next_state = (!message.starred).to_string();
+    let label = if message.starred {
+        text(ctx.lang, Text::Unfavorite)
+    } else {
+        text(ctx.lang, Text::Favorite)
+    };
+    html! {
+        form data-api-form="" data-reset="false" data-reload="true" data-endpoint=(format!("{}/favorite", message_detail_endpoint(message))) {
+            input type="hidden" name="starred" value=(next_state);
+            button class="mail-action-icon" type="submit" aria-label=(label) title=(label) aria-pressed=(message.starred.to_string()) {
+                (star_icon(message.starred))
+            }
+        }
+    }
+}
+
+fn delete_detail_form(ctx: &PageContext, message: &crate::MessageDetailRow) -> Markup {
+    html! {
+        form data-api-form="" data-reset="false" data-method="DELETE" data-endpoint=(message_detail_endpoint(message)) data-redirect=(localized_path(ctx, "/portal")) {
+            button class="mail-action-icon" type="submit" aria-label=(text(ctx.lang, Text::Delete)) title=(text(ctx.lang, Text::Delete)) {
+                (trash_icon())
+            }
+        }
+    }
+}
+
+fn reply_detail_button(ctx: &PageContext, message: &crate::MessageDetailRow) -> Markup {
+    html! {
+        button class="mail-action-icon" type="button" data-reply-action="" data-reply-from=(&message.mailbox) data-reply-to=(reply_recipient(message)) data-reply-subject=(reply_subject(&message.subject)) data-reply-body=(reply_body(message)) data-reply-href=(localized_anchor_path(ctx, "/portal", "compose")) aria-label=(text(ctx.lang, Text::Reply)) title=(text(ctx.lang, Text::Reply)) {
+            (reply_icon())
+        }
+    }
+}
+
 fn message_detail_path(message: &crate::MessageRow, inbound: bool) -> String {
     format!(
         "/portal/{}/{}",
@@ -1173,6 +1290,15 @@ fn mail_icon() -> Markup {
         svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" {
             rect x="3" y="5" width="18" height="14" rx="2" {}
             path d="m3 7 9 6 9-6" {}
+        }
+    }
+}
+
+fn reply_icon() -> Markup {
+    html! {
+        svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" {
+            path d="m9 17-5-5 5-5" {}
+            path d="M20 18v-2a4 4 0 0 0-4-4H4" {}
         }
     }
 }
@@ -1360,10 +1486,45 @@ fn message_endpoint(message: &crate::MessageRow, inbound: bool) -> String {
     )
 }
 
+fn message_detail_endpoint(message: &crate::MessageDetailRow) -> String {
+    format!(
+        "/api/v1/portal/mail/{}/{}",
+        message.direction, message.provider_id
+    )
+}
+
 fn direction_path(inbound: bool) -> &'static str {
     match inbound {
         true => "inbound",
         false => "outbound",
+    }
+}
+
+fn reply_recipient(message: &crate::MessageDetailRow) -> &str {
+    if !message.reply_to.trim().is_empty() {
+        return &message.reply_to;
+    }
+    if message.direction == "outbound" && !message.to.trim().is_empty() {
+        return &message.to;
+    }
+    &message.from
+}
+
+fn reply_subject(subject: &str) -> String {
+    match subject.trim_start().to_ascii_lowercase().starts_with("re:") {
+        true => subject.to_string(),
+        false => format!("Re: {subject}"),
+    }
+}
+
+fn reply_body(message: &crate::MessageDetailRow) -> String {
+    let body = message.text.trim();
+    match body.is_empty() {
+        true => String::new(),
+        false => format!(
+            "\n\n\nOn {}, {} wrote:\n{}",
+            message.received_at, message.from, body
+        ),
     }
 }
 
@@ -1675,12 +1836,12 @@ fn mail_topbar(ctx: &PageContext, email: &str) -> Markup {
                 (brand_mark())
                 span { "RNovEmail" }
             }
+            label class="mail-search" {
+                input type="search" data-mail-search="" placeholder=(text(ctx.lang, Text::SearchMail)) autocomplete="off";
+            }
             nav class="mail-nav-group" aria-label=(text(ctx.lang, Text::Portal)) {
                 a class="mail-nav-link" href="#inbox" { (text(ctx.lang, Text::Inbox)) }
                 a class="mail-nav-link" href="#sent" { (text(ctx.lang, Text::Sent)) }
-            }
-            label class="mail-search" {
-                input type="search" data-mail-search="" placeholder=(text(ctx.lang, Text::SearchMail)) autocomplete="off";
             }
             a class="mail-compose-link" href="#compose" { (text(ctx.lang, Text::Compose)) }
             div class="mail-user" {
@@ -1766,12 +1927,23 @@ fn base_page(ctx: &PageContext, title: &str, body: Markup) -> Markup {
             head {
                 meta charset="utf-8";
                 meta name="viewport" content="width=device-width, initial-scale=1";
+                (favicon_link())
                 title { "RNovEmail " (title) }
                 style { (PreEscaped(ADMIN_CSS)) }
             }
             body { (body) }
         }
     }
+}
+
+fn favicon_link() -> Markup {
+    html! {
+        link id="rnovemail-favicon" rel="icon" type="image/svg+xml" href=(favicon_href());
+    }
+}
+
+fn favicon_href() -> &'static str {
+    "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='6' y1='34' x2='34' y2='6' gradientUnits='userSpaceOnUse'%3E%3Cstop stop-color='%2314b8a6'/%3E%3Cstop offset='.52' stop-color='%232563eb'/%3E%3Cstop offset='1' stop-color='%238b5cf6'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect x='3' y='3' width='34' height='34' rx='9' fill='url(%23g)'/%3E%3Cpath d='M10.5 15.5h19v13h-19z' fill='none' stroke='white' stroke-width='2'/%3E%3Cpath d='M11.5 16.5 20 22.5l8.5-6' fill='none' stroke='white' stroke-width='2' stroke-linecap='round'/%3E%3Ccircle cx='30' cy='11' r='3.2' fill='white'/%3E%3C/svg%3E"
 }
 
 fn admin_nav(ctx: &PageContext) -> Markup {
@@ -1909,6 +2081,16 @@ fn localized_path(ctx: &PageContext, path: &str) -> String {
         path,
         ctx.lang.code(),
         ctx.theme.as_str()
+    )
+}
+
+fn localized_anchor_path(ctx: &PageContext, path: &str, anchor: &str) -> String {
+    format!(
+        "{}?lang={}&theme={}#{}",
+        path,
+        ctx.lang.code(),
+        ctx.theme.as_str(),
+        anchor
     )
 }
 

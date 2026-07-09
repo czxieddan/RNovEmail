@@ -134,9 +134,16 @@ async fn portal_inbound_message_data(
     let view = state.hydrate_inbound_message_view(message).await;
     let message = view.message;
     let detail_error = view.detail_error;
+    let states = state.list_message_user_states()?;
+    let starred = message_starred(
+        &states,
+        &email,
+        MessageDirection::Inbound,
+        &message.provider_event_id,
+    );
     Ok(PortalMessageData {
         email: email.as_str().to_string(),
-        message: message_detail_row(message, mailbox, detail_error.as_deref()),
+        message: message_detail_row(message, mailbox, detail_error.as_deref(), starred),
     })
 }
 
@@ -155,9 +162,12 @@ fn portal_outbound_message_data(
     let owned_addresses = owned_address_lookup(&mailboxes, owner.id());
     let message = state.outbound_message_by_id(message_id)?;
     ensure_owned_outbound_message(&message, &owned_addresses)?;
+    let provider_id = outbound_provider_id(&message);
+    let states = state.list_message_user_states()?;
+    let starred = message_starred(&states, &email, MessageDirection::Outbound, &provider_id);
     Ok(PortalMessageData {
         email: email.as_str().to_string(),
-        message: outbound_detail_row(message),
+        message: outbound_detail_row(message, provider_id, starred),
     })
 }
 
@@ -339,9 +349,11 @@ fn message_detail_row(
     message: InboundMessage,
     mailbox: String,
     detail_error: Option<&str>,
+    starred: bool,
 ) -> MessageDetailRow {
     let detail = message.detail.as_ref();
     MessageDetailRow {
+        direction: "inbound".to_string(),
         mailbox: mailbox.clone(),
         provider_id: message.provider_event_id.clone(),
         status: "Received".to_string(),
@@ -368,16 +380,21 @@ fn message_detail_row(
         attachments: detail.map(attachment_rows).unwrap_or_default(),
         raw_download_url: raw_download_url(detail),
         raw_expires_at: raw_expires_at(detail),
+        starred,
     }
 }
 
-fn outbound_detail_row(message: OutboundMessage) -> MessageDetailRow {
-    let provider_id = outbound_provider_id(&message);
+fn outbound_detail_row(
+    message: OutboundMessage,
+    provider_id: String,
+    starred: bool,
+) -> MessageDetailRow {
     let status = format!("{:?}", message.status);
     let from = message.from.as_str().to_string();
     let to = join_email_addresses(&message.to);
     let received_at = outbound_at(&message);
     MessageDetailRow {
+        direction: "outbound".to_string(),
         mailbox: from.clone(),
         provider_id,
         status,
@@ -396,6 +413,7 @@ fn outbound_detail_row(message: OutboundMessage) -> MessageDetailRow {
         attachments: Vec::new(),
         raw_download_url: String::new(),
         raw_expires_at: String::new(),
+        starred,
     }
 }
 
