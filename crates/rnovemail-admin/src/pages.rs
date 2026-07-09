@@ -72,10 +72,10 @@ a { color: inherit; text-decoration: none; }
   letter-spacing: 0;
 }
 .mark {
-  border-radius: 8px;
+  border-radius: 6px;
   flex: 0 0 auto;
-  height: 34px;
-  width: 34px;
+  height: 24px;
+  width: 24px;
 }
 span.mark {
   background: var(--blue);
@@ -282,10 +282,10 @@ button.secondary {
   background: var(--panel);
   border-bottom: 1px solid var(--line);
   display: grid;
-  gap: 16px;
-  grid-template-columns: minmax(190px, 260px) minmax(260px, 1fr) auto;
-  min-height: 68px;
-  padding: 0 24px;
+  gap: 18px;
+  grid-template-columns: auto auto minmax(220px, 560px) auto auto;
+  min-height: 56px;
+  padding: 0 16px;
   position: sticky;
   top: 0;
   z-index: 30;
@@ -293,19 +293,52 @@ button.secondary {
 .mail-brand {
   align-items: center;
   display: flex;
-  font-size: 18px;
+  font-size: 14px;
   font-weight: 800;
-  gap: 10px;
-}
-.mail-primary-nav {
-  display: flex;
   gap: 8px;
-  justify-content: center;
+  min-width: 150px;
+}
+.mail-nav-group {
+  align-items: center;
+  display: flex;
+  gap: 22px;
+  justify-content: flex-start;
+}
+.mail-nav-link,
+.mail-compose-link {
+  color: var(--muted);
+  display: inline-flex;
+  font-weight: 750;
+  min-height: 32px;
+  place-items: center;
+}
+.mail-nav-link:hover,
+.mail-nav-link:focus,
+.mail-compose-link:hover,
+.mail-compose-link:focus {
+  color: var(--blue);
+  outline: none;
+}
+.mail-search {
+  justify-self: center;
+  max-width: 560px;
+  width: 100%;
+}
+.mail-search input {
+  background: var(--bg);
+  border-radius: 999px;
+  min-height: 38px;
+  padding: 8px 16px;
+}
+.mail-compose-link {
+  color: var(--blue);
+  justify-self: end;
 }
 .mail-user {
   align-items: center;
   display: flex;
   gap: 10px;
+  justify-self: end;
 }
 .mail-address {
   color: var(--muted);
@@ -349,16 +382,15 @@ button.secondary {
 }
 .mail-main {
   display: grid;
-  gap: 16px;
-  margin: 0 auto;
-  max-width: 1180px;
-  padding: 22px 24px 40px;
+  gap: 0;
+  margin: 0;
+  max-width: none;
+  min-height: calc(100vh - 56px);
+  padding: 0;
 }
-.mail-summary {
-  align-items: center;
-  display: flex;
-  gap: 14px;
-  justify-content: space-between;
+.mail-workspace {
+  min-height: calc(100vh - 56px);
+  width: 100%;
 }
 .mail-pane {
   display: none;
@@ -366,44 +398,55 @@ button.secondary {
 .mail-pane[data-active="true"] {
   display: block;
 }
+.mail-list-pane,
+.compose-workspace {
+  min-height: calc(100vh - 56px);
+}
 .mail-list {
   display: grid;
   gap: 1px;
-  margin-top: 14px;
+  margin-top: 0;
 }
 .mail-row {
   align-items: stretch;
-  background: var(--panel);
-  border: 1px solid var(--line);
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--line);
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  min-height: 64px;
-}
-.mail-row:first-child {
-  border-radius: 8px 8px 0 0;
-}
-.mail-row:last-child {
-  border-radius: 0 0 8px 8px;
+  min-height: 48px;
+  position: relative;
 }
 .mail-row-actions {
   align-items: center;
   display: flex;
-  gap: 6px;
-  padding: 12px 0 12px 12px;
+  gap: 4px;
+  left: 14px;
+  padding: 0;
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 2;
 }
-.mail-icon {
+.mail-action-icon {
+  align-items: center;
   background: transparent;
-  border: 1px solid var(--line);
+  border: 0;
+  border-radius: 999px;
   color: var(--ink);
-  min-height: 34px;
-  min-width: 34px;
+  display: inline-flex;
+  justify-content: center;
+  min-height: 32px;
+  min-width: 32px;
   padding: 0;
 }
-.mail-icon[aria-pressed="true"] {
+.mail-action-icon:hover,
+.mail-action-icon:focus,
+.mail-action-icon[aria-pressed="true"] {
   background: var(--blue-soft);
   color: var(--blue);
+  box-shadow: none;
 }
-.mail-icon svg {
+.mail-action-icon svg {
   height: 17px;
   width: 17px;
 }
@@ -414,8 +457,10 @@ button.secondary {
   gap: 12px;
   grid-template-columns: minmax(140px, 220px) minmax(0, 1fr) auto;
   min-width: 0;
-  padding: 12px;
+  min-height: 48px;
+  padding: 9px 20px 9px 92px;
   transition: background 160ms ease;
+  width: 100%;
 }
 .mail-row-link:hover,
 .mail-row-link:focus {
@@ -432,13 +477,27 @@ button.secondary {
 .mail-content {
   min-width: 0;
 }
+.mail-line {
+  align-items: baseline;
+  display: flex;
+  gap: 8px;
+  min-width: 0;
+  white-space: nowrap;
+}
 .mail-subject {
   color: var(--ink);
+  flex: 0 1 auto;
   font-weight: 750;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .mail-preview {
   color: var(--muted);
-  margin: 3px 0 0;
+  flex: 1 1 auto;
+  margin: 0;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -475,6 +534,9 @@ button.secondary {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+}
+.compose-workspace {
+  padding: 28px clamp(18px, 4vw, 64px);
 }
 .form-grid {
   display: grid;
@@ -555,6 +617,84 @@ button.secondary {
   min-height: 360px;
   width: 100%;
 }
+.message-view {
+  color: var(--ink);
+  min-height: calc(100vh - 56px);
+  padding: 10px clamp(18px, 4vw, 64px) 56px;
+}
+.message-toolbar {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  min-height: 40px;
+}
+.message-toolbar-spacer {
+  border-left: 1px solid var(--line);
+  height: 22px;
+}
+.message-subject-line {
+  font-size: 22px;
+  font-weight: 500;
+  line-height: 1.35;
+  margin: 18px 0 18px 54px;
+}
+.message-sender-row {
+  align-items: start;
+  display: grid;
+  gap: 12px;
+  grid-template-columns: 42px minmax(0, 1fr) auto;
+  margin-top: 8px;
+}
+.sender-avatar {
+  align-items: center;
+  background: var(--blue);
+  border-radius: 999px;
+  color: #fff;
+  display: inline-flex;
+  font-weight: 800;
+  height: 40px;
+  justify-content: center;
+  width: 40px;
+}
+.sender-primary {
+  color: var(--ink);
+  font-weight: 800;
+}
+.sender-secondary {
+  color: var(--muted);
+  font-size: 13px;
+  margin-top: 2px;
+}
+.message-time {
+  color: var(--muted);
+  font-size: 13px;
+  white-space: nowrap;
+}
+.message-body-reader {
+  background: transparent;
+  border: 0;
+  color: var(--ink);
+  font: inherit;
+  line-height: 1.65;
+  margin: 14px 0 0 54px;
+  max-width: 1120px;
+  overflow: visible;
+  padding: 0;
+  white-space: pre-wrap;
+}
+.message-html-reader {
+  background: #fff;
+  border: 0;
+  margin: 14px 0 0 54px;
+  min-height: 420px;
+  width: calc(100% - 54px);
+}
+.message-view .message-details {
+  border-top: 1px solid var(--line);
+  margin: 28px 0 0 54px;
+  max-width: 1120px;
+  padding-top: 12px;
+}
 @media (max-width: 900px) {
   .shell { grid-template-columns: 1fr; }
   .side { border-bottom: 1px solid var(--line); border-right: 0; }
@@ -562,9 +702,17 @@ button.secondary {
   .topbar { align-items: stretch; flex-direction: column; }
   .settings-menu { left: 0; right: auto; }
   .mail-topbar { grid-template-columns: 1fr; padding: 14px 18px; position: static; }
-  .mail-primary-nav { justify-content: flex-start; overflow-x: auto; }
+  .mail-nav-group { justify-content: flex-start; overflow-x: auto; }
+  .mail-search { justify-self: stretch; }
+  .mail-compose-link { justify-self: start; }
   .mail-user { justify-content: space-between; }
   .mail-row-link { grid-template-columns: minmax(0, 1fr); }
+  .message-subject-line,
+  .message-body-reader,
+  .message-html-reader,
+  .message-view .message-details { margin-left: 0; width: 100%; }
+  .message-sender-row { grid-template-columns: 36px minmax(0, 1fr); }
+  .message-time { grid-column: 2; }
   .actions,
   .mail-toolbar,
   .form-grid,
@@ -577,6 +725,7 @@ button.secondary {
 const ADMIN_JS: &str = r##"
 setupMailPanes();
 setupDraftActions();
+setupMailSearch();
 
 document.querySelectorAll("[data-draft-key]").forEach((form) => {
   restoreDraft(form);
@@ -712,6 +861,18 @@ function setupDraftActions() {
   });
 }
 
+function setupMailSearch() {
+  const search = document.querySelector("[data-mail-search]");
+  if (!search) return;
+  search.addEventListener("input", () => {
+    const query = search.value.trim().toLocaleLowerCase();
+    document.querySelectorAll("[data-search-text]").forEach((row) => {
+      const value = row.dataset.searchText || "";
+      row.hidden = query.length > 0 && !value.toLocaleLowerCase().includes(query);
+    });
+  });
+}
+
 function handleDraftAction(button) {
   const form = draftForm(button);
   if (!form) return;
@@ -800,16 +961,11 @@ pub fn portal_page(ctx: &PageContext, data: &PortalData) -> Markup {
         text(ctx.lang, Text::Portal),
         &data.email,
         html! {
-            section class="panel mail-summary" {
-                div {
-                    h2 { (data.email) }
-                    p { (text(ctx.lang, Text::Mailboxes)) ": " (data.mailboxes.len()) }
-                }
-                a class="button" href="#compose" { (text(ctx.lang, Text::Compose)) }
+            div class="mail-workspace" {
+                (message_list(ctx, "inbox", Text::Inbox, &data.inbox, true, true))
+                (message_list(ctx, "sent", Text::Sent, &data.sent, false, false))
+                (compose_form(ctx, data))
             }
-            (message_list(ctx, "inbox", Text::Inbox, &data.inbox, true, true))
-            (message_list(ctx, "sent", Text::Sent, &data.sent, false, false))
-            (compose_form(ctx, data))
         },
     )
 }
@@ -820,27 +976,35 @@ pub fn portal_message_page(ctx: &PageContext, data: &crate::PortalMessageData) -
         &data.message.subject,
         &data.email,
         html! {
-            section class="panel accent" {
-                div class="actions" {
-                    a class="button secondary" href=(localized_path(ctx, "/portal")) {
-                        (text(ctx.lang, Text::Back))
+            article class="message-view" {
+                div class="message-toolbar" {
+                    a class="mail-action-icon" href=(localized_path(ctx, "/portal")) aria-label=(text(ctx.lang, Text::Back)) title=(text(ctx.lang, Text::Back)) {
+                        (back_icon())
+                    }
+                    span class="message-toolbar-spacer" {}
+                    a class="mail-action-icon" href="#message-details" title=(text(ctx.lang, Text::Details)) aria-label=(text(ctx.lang, Text::Details)) {
+                        (mail_icon())
                     }
                 }
-                h2 { (&data.message.subject) }
-                div class="record-meta" {
-                    (detail_meta(ctx, Text::From, &data.message.from))
-                    (detail_meta(ctx, Text::To, &data.message.to))
+                h1 class="message-subject-line" { (&data.message.subject) }
+                div class="message-sender-row" {
+                    span class="sender-avatar" aria-hidden="true" { (avatar_label(&data.message.from)) }
+                    div {
+                        div class="sender-primary" { (&data.message.from) }
+                        div class="sender-secondary" { (text(ctx.lang, Text::To)) " " (&data.message.to) }
+                    }
+                    time class="message-time" datetime=(&data.message.received_at) { (message_date(&data.message.received_at)) }
                 }
+                (primary_message_body(ctx, &data.message))
+                (message_detail_summary(ctx, &data.message))
             }
-            (primary_message_body(ctx, &data.message))
-            (message_detail_summary(ctx, &data.message))
         },
     )
 }
 
 fn compose_form(ctx: &PageContext, data: &PortalData) -> Markup {
     html! {
-        section id="compose" class="panel accent compose-panel mail-pane" data-mail-pane="" data-active="false" {
+        section id="compose" class="compose-panel compose-workspace mail-pane" data-mail-pane="" data-active="false" {
             div class="compose-heading" {
                 h2 { (text(ctx.lang, Text::Compose)) }
                 button class="button secondary" type="button" data-close-compose="" data-save-confirm=(text(ctx.lang, Text::SaveDraftConfirm)) {
@@ -889,13 +1053,10 @@ fn message_list(
     active: bool,
 ) -> Markup {
     html! {
-        section id=(id) class="mail-pane" data-mail-pane="" data-active=(if active { "true" } else { "false" }) {
-            div class="panel" {
-                h2 { (text(ctx.lang, title)) }
-                div class="mail-list" {
-                    @for message in messages {
-                        (message_row(ctx, message, inbound))
-                    }
+        section id=(id) class="mail-pane mail-list-pane" data-mail-pane="" data-active=(if active { "true" } else { "false" }) aria-label=(text(ctx.lang, title)) {
+            div class="mail-list" {
+                @for message in messages {
+                    (message_row(ctx, message, inbound))
                 }
             }
         }
@@ -904,20 +1065,22 @@ fn message_list(
 
 fn message_row(ctx: &PageContext, message: &crate::MessageRow, inbound: bool) -> Markup {
     html! {
-        article class="mail-row" {
-            div class="mail-row-actions" {
-                (favorite_form(ctx, message, inbound))
-                (delete_message_form(ctx, message, inbound))
-            }
+        article class="mail-row" data-search-text=(message_search_text(message)) {
             a class="mail-row-link" href=(localized_path(ctx, &message_detail_path(message, inbound))) {
                 div class="mail-participant" {
                     @if inbound { (&message.from) } @else { (&message.to) }
                 }
                 div class="mail-content" {
-                    div class="mail-subject" { (&message.subject) }
-                    p class="mail-preview" { (&message.text) }
+                    div class="mail-line" {
+                        span class="mail-subject" { (&message.subject) }
+                        span class="mail-preview" { (&message.text) }
+                    }
                 }
                 time class="mail-date" datetime=(&message.at) { (message_date(&message.at)) }
+            }
+            div class="mail-row-actions" {
+                (favorite_form(ctx, message, inbound))
+                (delete_message_form(ctx, message, inbound))
             }
         }
     }
@@ -933,7 +1096,7 @@ fn favorite_form(ctx: &PageContext, message: &crate::MessageRow, inbound: bool) 
     html! {
         form data-api-form="" data-reset="false" data-reload="true" data-endpoint=(favorite_endpoint(message, inbound)) {
             input type="hidden" name="starred" value=(next_state);
-            button class="mail-icon" type="submit" aria-label=(label) title=(label) aria-pressed=(message.starred.to_string()) {
+            button class="mail-action-icon" type="submit" aria-label=(label) title=(label) aria-pressed=(message.starred.to_string()) {
                 (star_icon(message.starred))
             }
         }
@@ -943,7 +1106,7 @@ fn favorite_form(ctx: &PageContext, message: &crate::MessageRow, inbound: bool) 
 fn delete_message_form(ctx: &PageContext, message: &crate::MessageRow, inbound: bool) -> Markup {
     html! {
         form data-api-form="" data-reset="false" data-reload="true" data-method="DELETE" data-endpoint=(message_endpoint(message, inbound)) {
-            button class="mail-icon" type="submit" aria-label=(text(ctx.lang, Text::Delete)) title=(text(ctx.lang, Text::Delete)) {
+            button class="mail-action-icon" type="submit" aria-label=(text(ctx.lang, Text::Delete)) title=(text(ctx.lang, Text::Delete)) {
                 (trash_icon())
             }
         }
@@ -956,6 +1119,16 @@ fn message_detail_path(message: &crate::MessageRow, inbound: bool) -> String {
         if inbound { "inbound" } else { "outbound" },
         message.id
     )
+}
+
+fn message_search_text(message: &crate::MessageRow) -> String {
+    [
+        message.from.as_str(),
+        message.to.as_str(),
+        message.subject.as_str(),
+        message.text.as_str(),
+    ]
+    .join(" ")
 }
 
 fn message_date(value: &str) -> &str {
@@ -986,33 +1159,33 @@ fn trash_icon() -> Markup {
     }
 }
 
-fn detail_meta(ctx: &PageContext, label: Text, value: &str) -> Markup {
-    match value.is_empty() {
-        true => html! {},
-        false => html! {
-            p {
-                strong { (text(ctx.lang, label)) }
-                span { (value) }
-            }
-        },
+fn back_icon() -> Markup {
+    html! {
+        svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" {
+            path d="M19 12H5" {}
+            path d="m12 19-7-7 7-7" {}
+        }
+    }
+}
+
+fn mail_icon() -> Markup {
+    html! {
+        svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" {
+            rect x="3" y="5" width="18" height="14" rx="2" {}
+            path d="m3 7 9 6 9-6" {}
+        }
     }
 }
 
 fn primary_message_body(ctx: &PageContext, message: &crate::MessageDetailRow) -> Markup {
     if !message.text.trim().is_empty() {
         return html! {
-            section class="panel" {
-                h2 { (text(ctx.lang, Text::Body)) }
-                pre class="message-body" { (&message.text) }
-            }
+            pre class="message-body-reader" { (&message.text) }
         };
     }
     if !message.html.trim().is_empty() {
         return html! {
-            section class="panel" {
-                h2 { (text(ctx.lang, Text::Body)) }
-                iframe class="message-html" sandbox="" referrerpolicy="no-referrer" srcdoc=(&message.html) {}
-            }
+            iframe class="message-html-reader" sandbox="" referrerpolicy="no-referrer" srcdoc=(&message.html) {}
         };
     }
     message_body_status(ctx, message)
@@ -1023,13 +1196,17 @@ fn message_body_status(ctx: &PageContext, message: &crate::MessageDetailRow) -> 
         return html! {};
     }
     html! {
-        section class="panel" {
-            h2 { (text(ctx.lang, Text::BodyUnavailable)) }
+        div class="message-body-reader" {
             p class="status" data-state=(body_status_state(message)) {
-                (body_status_text(ctx, message))
+                (text(ctx.lang, Text::BodyUnavailable))
                 @if !message.detail_error.is_empty() {
                     " "
+                    (text(ctx.lang, Text::DetailFetchFailed))
+                    " "
                     code class="endpoint" { (&message.detail_error) }
+                } @else if message.detail_loaded {
+                    " "
+                    (text(ctx.lang, Text::ProviderDidNotReturnBody))
                 }
             }
         }
@@ -1038,28 +1215,26 @@ fn message_body_status(ctx: &PageContext, message: &crate::MessageDetailRow) -> 
 
 fn message_detail_summary(ctx: &PageContext, message: &crate::MessageDetailRow) -> Markup {
     html! {
-        section class="panel" {
-            details class="message-details" {
-                summary { (text(ctx.lang, Text::Details)) }
-                dl {
-                    (detail_pair(ctx, Text::Email, &message.mailbox))
-                    (detail_code_pair(ctx, Text::ProviderId, &message.provider_id))
-                    (detail_pair(ctx, Text::Status, message_status_text(ctx, &message.status)))
-                    (detail_pair(ctx, Text::From, &message.from))
-                    (detail_pair(ctx, Text::To, &message.to))
-                    (detail_pair(ctx, Text::Cc, &message.cc))
-                    (detail_pair(ctx, Text::Bcc, &message.bcc))
-                    (detail_pair(ctx, Text::ReplyTo, &message.reply_to))
-                    (detail_pair(ctx, Text::ReceivedAt, &message.received_at))
-                    (detail_pair(ctx, Text::DetailFetchFailed, &message.detail_error))
-                    @if !message.html.is_empty() && message.html != message.text {
-                        dt { (text(ctx.lang, Text::Html)) }
-                        dd { pre class="message-body" { (&message.html) } }
-                    }
-                    (detail_headers(ctx, &message.headers))
-                    (detail_attachments(ctx, &message.attachments))
-                    (raw_message_detail(ctx, message))
+        details id="message-details" class="message-details" {
+            summary { (text(ctx.lang, Text::Details)) }
+            dl {
+                (detail_pair(ctx, Text::Email, &message.mailbox))
+                (detail_code_pair(ctx, Text::ProviderId, &message.provider_id))
+                (detail_pair(ctx, Text::Status, message_status_text(ctx, &message.status)))
+                (detail_pair(ctx, Text::From, &message.from))
+                (detail_pair(ctx, Text::To, &message.to))
+                (detail_pair(ctx, Text::Cc, &message.cc))
+                (detail_pair(ctx, Text::Bcc, &message.bcc))
+                (detail_pair(ctx, Text::ReplyTo, &message.reply_to))
+                (detail_pair(ctx, Text::ReceivedAt, &message.received_at))
+                (detail_pair(ctx, Text::DetailFetchFailed, &message.detail_error))
+                @if !message.html.is_empty() && message.html != message.text {
+                    dt { (text(ctx.lang, Text::Html)) }
+                    dd { pre class="message-body" { (&message.html) } }
                 }
+                (detail_headers(ctx, &message.headers))
+                (detail_attachments(ctx, &message.attachments))
+                (raw_message_detail(ctx, message))
             }
         }
     }
@@ -1162,16 +1337,6 @@ fn body_status_state(message: &crate::MessageDetailRow) -> &'static str {
     match message.detail_error.is_empty() && message.detail_loaded {
         true => "",
         false => "error",
-    }
-}
-
-fn body_status_text(ctx: &PageContext, message: &crate::MessageDetailRow) -> &'static str {
-    if !message.detail_error.is_empty() {
-        return text(ctx.lang, Text::DetailFetchFailed);
-    }
-    match message.detail_loaded {
-        true => text(ctx.lang, Text::ProviderDidNotReturnBody),
-        false => text(ctx.lang, Text::BodyUnavailable),
     }
 }
 
@@ -1510,13 +1675,15 @@ fn mail_topbar(ctx: &PageContext, email: &str) -> Markup {
                 (brand_mark())
                 span { "RNovEmail" }
             }
-            nav class="mail-primary-nav" aria-label=(text(ctx.lang, Text::Portal)) {
-                a class="button secondary" href="#inbox" { (text(ctx.lang, Text::Inbox)) }
-                a class="button secondary" href="#sent" { (text(ctx.lang, Text::Sent)) }
-                a class="button" href="#compose" { (text(ctx.lang, Text::Compose)) }
+            nav class="mail-nav-group" aria-label=(text(ctx.lang, Text::Portal)) {
+                a class="mail-nav-link" href="#inbox" { (text(ctx.lang, Text::Inbox)) }
+                a class="mail-nav-link" href="#sent" { (text(ctx.lang, Text::Sent)) }
             }
+            label class="mail-search" {
+                input type="search" data-mail-search="" placeholder=(text(ctx.lang, Text::SearchMail)) autocomplete="off";
+            }
+            a class="mail-compose-link" href="#compose" { (text(ctx.lang, Text::Compose)) }
             div class="mail-user" {
-                span class="mail-address" { (email) }
                 (avatar_menu(ctx, email))
             }
         }
