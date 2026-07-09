@@ -55,6 +55,115 @@ a { color: inherit; text-decoration: none; }
   z-index: 10;
 }
 .skip:focus { top: 16px; }
+.login-shell {
+  align-content: center;
+  display: grid;
+  gap: 22px;
+  grid-template-rows: minmax(0, 1fr) auto;
+  min-height: 100vh;
+  padding: clamp(24px, 5vw, 48px);
+}
+.login-card {
+  align-self: center;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+  display: grid;
+  gap: clamp(28px, 5vw, 72px);
+  grid-template-columns: minmax(220px, 0.85fr) minmax(280px, 1fr);
+  margin: 0 auto;
+  max-width: 1160px;
+  min-height: 360px;
+  padding: clamp(28px, 5vw, 48px);
+  width: 100%;
+}
+.login-card .logo-mark {
+  height: 42px;
+  width: 42px;
+}
+.login-identity {
+  align-content: start;
+  display: grid;
+  gap: 18px;
+}
+.login-identity h1 {
+  font-size: clamp(34px, 4vw, 44px);
+  font-weight: 500;
+  line-height: 1.15;
+}
+.login-identity p {
+  color: var(--ink);
+  font-size: 16px;
+}
+.login-form {
+  align-content: center;
+  display: grid;
+  gap: 14px;
+}
+.login-actions {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  justify-content: flex-end;
+  margin-top: 16px;
+}
+.login-actions button {
+  border-radius: 999px;
+  min-width: 96px;
+}
+.login-footer {
+  align-items: center;
+  color: var(--muted);
+  display: flex;
+  gap: 16px;
+  justify-content: space-between;
+  margin: 0 auto;
+  max-width: 1160px;
+  width: 100%;
+}
+.login-language-links,
+.login-footer-actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.language-dialog {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+  color: var(--ink);
+  max-width: 420px;
+  padding: 20px;
+  width: min(420px, calc(100vw - 32px));
+}
+.language-dialog::backdrop {
+  background: rgba(15, 23, 42, 0.42);
+}
+.language-dialog-header {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+.language-options {
+  display: grid;
+  gap: 8px;
+  margin-top: 16px;
+}
+.language-option {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+.language-option:hover,
+.language-option:focus {
+  border-color: var(--blue);
+  color: var(--blue);
+  outline: none;
+}
 .shell {
   display: grid;
   grid-template-columns: 264px minmax(0, 1fr);
@@ -702,6 +811,9 @@ button.secondary {
   padding-top: 12px;
 }
 @media (max-width: 900px) {
+  .login-shell { padding: 18px; }
+  .login-card { grid-template-columns: 1fr; min-height: auto; }
+  .login-footer { align-items: flex-start; flex-direction: column; }
   .shell { grid-template-columns: 1fr; }
   .side { border-bottom: 1px solid var(--line); border-right: 0; }
   .main { padding: 20px; }
@@ -734,6 +846,7 @@ setupDraftActions();
 setupMailSearch();
 setupDetailToggles();
 setupReplyActions();
+setupLanguageDialogs();
 
 document.querySelectorAll("[data-draft-key]").forEach((form) => {
   restoreDraft(form);
@@ -954,6 +1067,29 @@ function draftValuePresent(value) {
   return String(value).trim().length > 0;
 }
 
+function setupLanguageDialogs() {
+  document.querySelectorAll("[data-language-dialog-target]").forEach((button) => {
+    button.addEventListener("click", () => openLanguageDialog(button));
+  });
+  document.querySelectorAll("[data-close-dialog]").forEach((button) => {
+    button.addEventListener("click", () => closeDialog(button));
+  });
+}
+
+function openLanguageDialog(button) {
+  const dialog = document.getElementById(button.dataset.languageDialogTarget);
+  if (!dialog) return;
+  if (dialog.showModal) dialog.showModal();
+  else dialog.setAttribute("open", "");
+}
+
+function closeDialog(button) {
+  const dialog = button.closest("dialog");
+  if (!dialog) return;
+  if (dialog.close) dialog.close();
+  else dialog.removeAttribute("open");
+}
+
 function handleDraftAction(button) {
   const form = draftForm(button);
   if (!form) return;
@@ -1001,33 +1137,45 @@ pub fn login_page(ctx: &PageContext, scope: LoginScopeView, failed: bool) -> Mar
         ctx,
         text(ctx.lang, Text::Login),
         html! {
-            main id="content" class="main" {
-                section class="panel accent" {
-                    h1 { (text(ctx.lang, Text::Login)) }
-                    form class="form-grid" method="post" action="/login" {
-                        input type="hidden" name="scope" value=(scope_value(scope));
-                        input type="hidden" name="next" value=(ctx.next);
-                        input type="hidden" name="lang" value=(ctx.lang.code());
-                        input type="hidden" name="theme" value=(ctx.theme.as_str());
-                        @if scope == LoginScopeView::User {
-                            label class="span-2" {
-                                (text(ctx.lang, Text::Email))
-                                input name="identity" type="email" autocomplete="email" required;
-                            }
-                        }
-                        label class="span-2" {
-                            (text(ctx.lang, Text::Password))
-                            input name="secret" type="password" autocomplete="current-password" required;
-                        }
-                        div class="span-2" {
-                            button type="submit" { (text(ctx.lang, Text::Login)) }
-                        }
-                        @if failed {
-                            p class="status span-2" data-state="error" { (text(ctx.lang, Text::Login)) }
+            main id="content" class="login-shell" {
+                section class="login-card" aria-labelledby="login-title" {
+                    div class="login-identity" {
+                        (brand_mark())
+                        div {
+                            h1 id="login-title" { (text(ctx.lang, Text::Login)) }
+                            p { (text(ctx.lang, Text::ContinueToService)) }
                         }
                     }
-                    div class="actions" {
+                    form class="login-form" method="post" action="/login" {
+                        div {
+                            input type="hidden" name="scope" value=(scope_value(scope));
+                            input type="hidden" name="next" value=(ctx.next);
+                            input type="hidden" name="lang" value=(ctx.lang.code());
+                            input type="hidden" name="theme" value=(ctx.theme.as_str());
+                            @if scope == LoginScopeView::User {
+                                label {
+                                    (text(ctx.lang, Text::Email))
+                                    input name="identity" type="email" autocomplete="email" required;
+                                }
+                            }
+                            label {
+                                (text(ctx.lang, Text::Password))
+                                input name="secret" type="password" autocomplete="current-password" required;
+                            }
+                            @if failed {
+                                p class="status" data-state="error" { (text(ctx.lang, Text::LoginFailed)) }
+                            }
+                        }
+                        div class="login-actions" {
+                            button type="submit" { (text(ctx.lang, Text::Login)) }
+                        }
+                    }
+                }
+                div class="login-footer" {
+                    div class="login-language-links" aria-label=(text(ctx.lang, Text::ChooseLanguage)) {
                         (login_language_links(ctx, scope))
+                    }
+                    div class="login-footer-actions" {
                         (login_theme_link(ctx, scope))
                     }
                 }
@@ -1301,6 +1449,15 @@ fn reply_icon() -> Markup {
         svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" {
             path d="m9 17-5-5 5-5" {}
             path d="M20 18v-2a4 4 0 0 0-4-4H4" {}
+        }
+    }
+}
+
+fn close_icon() -> Markup {
+    html! {
+        svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" {
+            path d="M18 6 6 18" {}
+            path d="m6 6 12 12" {}
         }
     }
 }
@@ -1826,6 +1983,7 @@ fn portal_layout(ctx: &PageContext, title: &str, email: &str, content: Markup) -
                     (content)
                 }
             }
+            (language_dialog(ctx))
             script { (PreEscaped(ADMIN_JS)) }
         },
     )
@@ -1880,7 +2038,9 @@ fn avatar_menu(ctx: &PageContext, email: &str) -> Markup {
                 (avatar_label(email))
             }
             div class="mail-menu" {
-                (language_links(ctx))
+                button class="secondary" type="button" data-language-dialog-target="language-dialog" {
+                    (text(ctx.lang, Text::ChooseLanguage))
+                }
                 (theme_link(ctx))
                 form method="post" action="/logout" {
                     button class="secondary" type="submit" { (text(ctx.lang, Text::Logout)) }
@@ -1965,6 +2125,35 @@ fn language_links(ctx: &PageContext) -> Markup {
     html! {
         a class="button secondary" href=(switch_lang(ctx, Lang::Zh)) { (text(ctx.lang, Text::LanguageZh)) }
         a class="button secondary" href=(switch_lang(ctx, Lang::Ja)) { (text(ctx.lang, Text::LanguageJa)) }
+        a class="button secondary" href=(switch_lang(ctx, Lang::En)) { (text(ctx.lang, Text::LanguageEn)) }
+        a class="button secondary" href=(switch_lang(ctx, Lang::Ru)) { (text(ctx.lang, Text::LanguageRu)) }
+    }
+}
+
+fn language_dialog(ctx: &PageContext) -> Markup {
+    html! {
+        dialog id="language-dialog" class="language-dialog" {
+            div class="language-dialog-header" {
+                h2 { (text(ctx.lang, Text::ChooseLanguage)) }
+                button class="mail-action-icon" type="button" data-close-dialog="" aria-label=(text(ctx.lang, Text::Close)) title=(text(ctx.lang, Text::Close)) {
+                    (close_icon())
+                }
+            }
+            div class="language-options" {
+                (language_option(ctx, Lang::Zh, Text::LanguageZh))
+                (language_option(ctx, Lang::Ja, Text::LanguageJa))
+                (language_option(ctx, Lang::En, Text::LanguageEn))
+                (language_option(ctx, Lang::Ru, Text::LanguageRu))
+            }
+        }
+    }
+}
+
+fn language_option(ctx: &PageContext, lang: Lang, label: Text) -> Markup {
+    html! {
+        a class="language-option" href=(switch_lang(ctx, lang)) {
+            (text(ctx.lang, label))
+        }
     }
 }
 
@@ -1995,6 +2184,8 @@ fn login_language_links(ctx: &PageContext, scope: LoginScopeView) -> Markup {
     html! {
         a class="button secondary" href=(login_href(ctx, scope, Lang::Zh, ctx.theme)) { (text(ctx.lang, Text::LanguageZh)) }
         a class="button secondary" href=(login_href(ctx, scope, Lang::Ja, ctx.theme)) { (text(ctx.lang, Text::LanguageJa)) }
+        a class="button secondary" href=(login_href(ctx, scope, Lang::En, ctx.theme)) { (text(ctx.lang, Text::LanguageEn)) }
+        a class="button secondary" href=(login_href(ctx, scope, Lang::Ru, ctx.theme)) { (text(ctx.lang, Text::LanguageRu)) }
     }
 }
 
