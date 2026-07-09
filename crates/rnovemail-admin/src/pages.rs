@@ -36,6 +36,7 @@ const ADMIN_CSS: &str = r#"
   --shadow: none;
 }
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 body {
   margin: 0;
   background: var(--bg);
@@ -283,7 +284,7 @@ button.secondary {
   border-bottom: 1px solid var(--line);
   display: grid;
   gap: 18px;
-  grid-template-columns: auto minmax(240px, 560px) auto auto auto;
+  grid-template-columns: auto minmax(240px, 560px) auto auto;
   min-height: 56px;
   padding: 0 16px;
   position: sticky;
@@ -312,8 +313,10 @@ button.secondary {
 .mail-nav-group {
   align-items: center;
   display: flex;
-  gap: 22px;
+  gap: 24px;
   justify-content: flex-start;
+  justify-self: start;
+  white-space: nowrap;
 }
 .mail-nav-link,
 .mail-compose-link {
@@ -332,7 +335,6 @@ button.secondary {
 }
 .mail-compose-link {
   color: var(--blue);
-  justify-self: end;
 }
 .mail-user {
   align-items: center;
@@ -1842,8 +1844,8 @@ fn mail_topbar(ctx: &PageContext, email: &str) -> Markup {
             nav class="mail-nav-group" aria-label=(text(ctx.lang, Text::Portal)) {
                 a class="mail-nav-link" href="#inbox" { (text(ctx.lang, Text::Inbox)) }
                 a class="mail-nav-link" href="#sent" { (text(ctx.lang, Text::Sent)) }
+                a class="mail-compose-link" href="#compose" { (text(ctx.lang, Text::Compose)) }
             }
-            a class="mail-compose-link" href="#compose" { (text(ctx.lang, Text::Compose)) }
             div class="mail-user" {
                 (avatar_menu(ctx, email))
             }
