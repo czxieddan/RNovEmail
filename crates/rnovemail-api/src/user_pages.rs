@@ -23,6 +23,7 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/portal", get(portal))
         .route("/portal/inbound/{id}", get(inbound_message))
+        .route("/portal/outbound/{id}", get(outbound_message_page))
 }
 
 #[derive(Deserialize)]
@@ -60,7 +61,25 @@ async fn inbound_message(
         Ok(principal) => principal,
         Err(_) => return Redirect::to(&login_location(&next)).into_response(),
     };
-    match portal_message_data(&state, &principal.subject, &id).await {
+    match portal_inbound_message_data(&state, &principal.subject, &id).await {
+        Ok(data) => rnovemail_admin::portal_message_page(&page_context(&query, &next), &data)
+            .into_response(),
+        Err(error) => error.into_response(),
+    }
+}
+
+async fn outbound_message_page(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Query(query): Query<PageQuery>,
+) -> Response {
+    let next = format!("/portal/outbound/{id}");
+    let principal = match state.user_principal(&headers) {
+        Ok(principal) => principal,
+        Err(_) => return Redirect::to(&login_location(&next)).into_response(),
+    };
+    match portal_outbound_message_data(&state, &principal.subject, &id) {
         Ok(data) => rnovemail_admin::portal_message_page(&page_context(&query, &next), &data)
             .into_response(),
         Err(error) => error.into_response(),
@@ -97,7 +116,7 @@ fn portal_data(state: &AppState, email: &str) -> Result<PortalData, ApiRejection
     })
 }
 
-async fn portal_message_data(
+async fn portal_inbound_message_data(
     state: &AppState,
     email: &str,
     message_id: &str,
@@ -118,6 +137,27 @@ async fn portal_message_data(
     Ok(PortalMessageData {
         email: email.as_str().to_string(),
         message: message_detail_row(message, mailbox, detail_error.as_deref()),
+    })
+}
+
+fn portal_outbound_message_data(
+    state: &AppState,
+    email: &str,
+    message_id: &str,
+) -> Result<PortalMessageData, ApiRejection> {
+    let email = EmailAddress::parse(email).map_err(|_| ApiRejection::BadRequest)?;
+    let users = state.list_users()?;
+    let owner = users
+        .iter()
+        .find(|user| user.primary_email() == &email)
+        .ok_or(ApiRejection::NotFound)?;
+    let mailboxes = state.list_mailboxes()?;
+    let owned_addresses = owned_address_lookup(&mailboxes, owner.id());
+    let message = state.outbound_message_by_id(message_id)?;
+    ensure_owned_outbound_message(&message, &owned_addresses)?;
+    Ok(PortalMessageData {
+        email: email.as_str().to_string(),
+        message: outbound_detail_row(message),
     })
 }
 
@@ -303,6 +343,8 @@ fn message_detail_row(
     let detail = message.detail.as_ref();
     MessageDetailRow {
         mailbox: mailbox.clone(),
+        provider_id: message.provider_event_id.clone(),
+        status: "Received".to_string(),
         from: detail_text(
             detail.map(|detail| detail.from.as_str()),
             message.from.as_str(),
@@ -329,6 +371,52 @@ fn message_detail_row(
     }
 }
 
+fn outbound_detail_row(message: OutboundMessage) -> MessageDetailRow {
+    let provider_id = outbound_provider_id(&message);
+    let status = format!("{:?}", message.status);
+    let from = message.from.as_str().to_string();
+    let to = join_email_addresses(&message.to);
+    let received_at = outbound_at(&message);
+    MessageDetailRow {
+        mailbox: from.clone(),
+        provider_id,
+        status,
+        from,
+        to,
+        cc: String::new(),
+        bcc: String::new(),
+        reply_to: String::new(),
+        subject: message.subject,
+        text: message.text,
+        html: String::new(),
+        detail_error: String::new(),
+        detail_loaded: true,
+        received_at,
+        headers: Vec::new(),
+        attachments: Vec::new(),
+        raw_download_url: String::new(),
+        raw_expires_at: String::new(),
+    }
+}
+
+fn ensure_owned_outbound_message(
+    message: &OutboundMessage,
+    addresses: &HashSet<String>,
+) -> Result<(), ApiRejection> {
+    match addresses.contains(message.from.as_str()) {
+        true => Ok(()),
+        false => Err(ApiRejection::NotFound),
+    }
+}
+
+fn outbound_at(message: &OutboundMessage) -> String {
+    message
+        .timeline
+        .last()
+        .map(|entry| entry.at.to_rfc3339())
+        .unwrap_or_default()
+}
+
 fn detail_text(value: Option<&str>, fallback: &str) -> String {
     value
         .map(str::trim)
@@ -350,6 +438,14 @@ fn join_values(values: &[String]) -> String {
         .map(String::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn join_email_addresses(values: &[EmailAddress]) -> String {
+    values
+        .iter()
+        .map(|email| email.as_str())
         .collect::<Vec<_>>()
         .join(", ")
 }

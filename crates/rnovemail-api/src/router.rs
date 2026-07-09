@@ -1791,6 +1791,8 @@ fn outbound_history_message(
     provider: &ProviderAccount,
     item: ProviderOutboundHistoryItem,
 ) -> OutboundMessage {
+    let status = item.status;
+    let created_at = item.created_at;
     OutboundMessage {
         id: rnovemail_domain::MessageId::new(),
         provider_account_id: provider.id(),
@@ -1799,8 +1801,12 @@ fn outbound_history_message(
         to: item.to,
         subject: item.subject,
         text: item.text,
-        status: item.status,
-        timeline: vec![timeline_entry(item.status, &item.provider_message_id)],
+        status,
+        timeline: vec![timeline_entry_at(
+            status,
+            created_at,
+            &item.provider_message_id,
+        )],
     }
 }
 
@@ -1901,9 +1907,17 @@ fn inbound_body_text(text: &str, detail: Option<&InboundMessageDetail>) -> Strin
 }
 
 fn timeline_entry(status: MessageStatus, note: &str) -> MessageTimelineEntry {
+    timeline_entry_at(status, Utc::now(), note)
+}
+
+fn timeline_entry_at(
+    status: MessageStatus,
+    at: chrono::DateTime<Utc>,
+    note: &str,
+) -> MessageTimelineEntry {
     MessageTimelineEntry {
         status,
-        at: Utc::now(),
+        at,
         note: note.to_string(),
     }
 }

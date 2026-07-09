@@ -72,13 +72,20 @@ a { color: inherit; text-decoration: none; }
   letter-spacing: 0;
 }
 .mark {
-  background: var(--blue);
   border-radius: 8px;
+  flex: 0 0 auto;
+  height: 34px;
+  width: 34px;
+}
+span.mark {
+  background: var(--blue);
   color: #fff;
   display: inline-grid;
-  height: 34px;
   place-items: center;
-  width: 34px;
+}
+.logo-mark {
+  display: block;
+  overflow: visible;
 }
 .nav {
   display: grid;
@@ -365,12 +372,12 @@ button.secondary {
   margin-top: 14px;
 }
 .mail-row {
+  align-items: stretch;
   background: var(--panel);
   border: 1px solid var(--line);
   display: grid;
-  gap: 12px;
-  grid-template-columns: auto minmax(160px, 220px) minmax(0, 1fr) auto;
-  padding: 12px;
+  grid-template-columns: auto minmax(0, 1fr);
+  min-height: 64px;
 }
 .mail-row:first-child {
   border-radius: 8px 8px 0 0;
@@ -379,9 +386,10 @@ button.secondary {
   border-radius: 0 0 8px 8px;
 }
 .mail-row-actions {
-  align-items: start;
+  align-items: center;
   display: flex;
   gap: 6px;
+  padding: 12px 0 12px 12px;
 }
 .mail-icon {
   background: transparent;
@@ -394,6 +402,25 @@ button.secondary {
 .mail-icon[aria-pressed="true"] {
   background: var(--blue-soft);
   color: var(--blue);
+}
+.mail-icon svg {
+  height: 17px;
+  width: 17px;
+}
+.mail-row-link {
+  align-items: center;
+  color: inherit;
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(140px, 220px) minmax(0, 1fr) auto;
+  min-width: 0;
+  padding: 12px;
+  transition: background 160ms ease;
+}
+.mail-row-link:hover,
+.mail-row-link:focus {
+  background: var(--blue-soft);
+  outline: none;
 }
 .mail-participant {
   color: var(--ink);
@@ -416,9 +443,14 @@ button.secondary {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.mail-date {
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
 .message-details {
   color: var(--muted);
-  margin-top: 8px;
+  margin-top: 16px;
 }
 .message-details summary {
   cursor: pointer;
@@ -512,6 +544,17 @@ button.secondary {
   padding: 12px;
   white-space: pre-wrap;
 }
+.message-details .message-body {
+  max-height: 220px;
+}
+.message-html {
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  margin-top: 10px;
+  min-height: 360px;
+  width: 100%;
+}
 @media (max-width: 900px) {
   .shell { grid-template-columns: 1fr; }
   .side { border-bottom: 1px solid var(--line); border-right: 0; }
@@ -521,9 +564,7 @@ button.secondary {
   .mail-topbar { grid-template-columns: 1fr; padding: 14px 18px; position: static; }
   .mail-primary-nav { justify-content: flex-start; overflow-x: auto; }
   .mail-user { justify-content: space-between; }
-  .mail-row { grid-template-columns: auto minmax(0, 1fr); }
-  .mail-row-actions { grid-column: 1; grid-row: 1 / span 2; }
-  .mail-content { grid-column: 2; }
+  .mail-row-link { grid-template-columns: minmax(0, 1fr); }
   .actions,
   .mail-toolbar,
   .form-grid,
@@ -787,31 +828,12 @@ pub fn portal_message_page(ctx: &PageContext, data: &crate::PortalMessageData) -
                 }
                 h2 { (&data.message.subject) }
                 div class="record-meta" {
-                    (detail_meta(ctx, Text::Email, &data.message.mailbox))
                     (detail_meta(ctx, Text::From, &data.message.from))
                     (detail_meta(ctx, Text::To, &data.message.to))
-                    (detail_meta(ctx, Text::Cc, &data.message.cc))
-                    (detail_meta(ctx, Text::Bcc, &data.message.bcc))
-                    (detail_meta(ctx, Text::ReplyTo, &data.message.reply_to))
-                    (detail_meta(ctx, Text::ReceivedAt, &data.message.received_at))
                 }
             }
-            (message_body_panel(ctx, Text::Body, &data.message.text))
-            (message_body_panel(ctx, Text::Html, &data.message.html))
-            (message_body_status(ctx, &data.message))
-            (headers_panel(ctx, &data.message.headers))
-            (attachments_panel(ctx, &data.message.attachments))
-            @if !data.message.raw_download_url.is_empty() {
-                section class="panel" {
-                    h2 { (text(ctx.lang, Text::RawMessage)) }
-                    (detail_meta(ctx, Text::ExpiresAt, &data.message.raw_expires_at))
-                    p {
-                        a href=(&data.message.raw_download_url) target="_blank" rel="noopener noreferrer" {
-                            (&data.message.raw_download_url)
-                        }
-                    }
-                }
-            }
+            (primary_message_body(ctx, &data.message))
+            (message_detail_summary(ctx, &data.message))
         },
     )
 }
@@ -842,6 +864,9 @@ fn compose_form(ctx: &PageContext, data: &PortalData) -> Markup {
                 }
                 div class="span-2 compose-actions" {
                     button type="submit" { (text(ctx.lang, Text::Send)) }
+                    button class="secondary" type="button" data-draft-action="open" data-draft-form="portal-compose" {
+                        (text(ctx.lang, Text::Drafts))
+                    }
                     button class="secondary" type="button" data-draft-action="save" data-draft-form="portal-compose" data-saved-text=(text(ctx.lang, Text::SaveDraft)) {
                         (text(ctx.lang, Text::SaveDraft))
                     }
@@ -884,34 +909,15 @@ fn message_row(ctx: &PageContext, message: &crate::MessageRow, inbound: bool) ->
                 (favorite_form(ctx, message, inbound))
                 (delete_message_form(ctx, message, inbound))
             }
-            div class="mail-participant" {
-                @if inbound { (&message.from) } @else { (&message.to) }
-            }
-            div class="mail-content" {
-                div class="mail-subject" { (&message.subject) }
-                p class="mail-preview" { (&message.text) }
-                (message_details(ctx, message, inbound))
-            }
-            div class="status" { (message_status_text(ctx, &message.status)) }
-        }
-    }
-}
-
-fn message_details(ctx: &PageContext, message: &crate::MessageRow, inbound: bool) -> Markup {
-    html! {
-        details class="message-details" {
-            summary { (text(ctx.lang, Text::Details)) }
-            dl {
-                dt { (text(ctx.lang, Text::Email)) } dd { (&message.mailbox) }
-                dt { (text(ctx.lang, Text::From)) } dd { (&message.from) }
-                dt { (text(ctx.lang, Text::To)) } dd { (&message.to) }
-                dt { (text(ctx.lang, Text::ReceivedAt)) } dd { (&message.at) }
-                dt { (text(ctx.lang, Text::ProviderId)) } dd { code class="endpoint" { (&message.provider_id) } }
-            }
-            @if inbound {
-                a class="button secondary" href=(localized_path(ctx, &format!("/portal/inbound/{}", message.id))) {
-                    (text(ctx.lang, Text::Details))
+            a class="mail-row-link" href=(localized_path(ctx, &message_detail_path(message, inbound))) {
+                div class="mail-participant" {
+                    @if inbound { (&message.from) } @else { (&message.to) }
                 }
+                div class="mail-content" {
+                    div class="mail-subject" { (&message.subject) }
+                    p class="mail-preview" { (&message.text) }
+                }
+                time class="mail-date" datetime=(&message.at) { (message_date(&message.at)) }
             }
         }
     }
@@ -919,11 +925,16 @@ fn message_details(ctx: &PageContext, message: &crate::MessageRow, inbound: bool
 
 fn favorite_form(ctx: &PageContext, message: &crate::MessageRow, inbound: bool) -> Markup {
     let next_state = (!message.starred).to_string();
+    let label = if message.starred {
+        text(ctx.lang, Text::Unfavorite)
+    } else {
+        text(ctx.lang, Text::Favorite)
+    };
     html! {
         form data-api-form="" data-reset="false" data-reload="true" data-endpoint=(favorite_endpoint(message, inbound)) {
             input type="hidden" name="starred" value=(next_state);
-            button class="mail-icon" type="submit" aria-pressed=(message.starred.to_string()) {
-                (if message.starred { text(ctx.lang, Text::Unfavorite) } else { text(ctx.lang, Text::Favorite) })
+            button class="mail-icon" type="submit" aria-label=(label) title=(label) aria-pressed=(message.starred.to_string()) {
+                (star_icon(message.starred))
             }
         }
     }
@@ -932,7 +943,45 @@ fn favorite_form(ctx: &PageContext, message: &crate::MessageRow, inbound: bool) 
 fn delete_message_form(ctx: &PageContext, message: &crate::MessageRow, inbound: bool) -> Markup {
     html! {
         form data-api-form="" data-reset="false" data-reload="true" data-method="DELETE" data-endpoint=(message_endpoint(message, inbound)) {
-            button class="mail-icon" type="submit" { (text(ctx.lang, Text::Delete)) }
+            button class="mail-icon" type="submit" aria-label=(text(ctx.lang, Text::Delete)) title=(text(ctx.lang, Text::Delete)) {
+                (trash_icon())
+            }
+        }
+    }
+}
+
+fn message_detail_path(message: &crate::MessageRow, inbound: bool) -> String {
+    format!(
+        "/portal/{}/{}",
+        if inbound { "inbound" } else { "outbound" },
+        message.id
+    )
+}
+
+fn message_date(value: &str) -> &str {
+    value
+        .split_once('T')
+        .map(|(date, _)| date)
+        .filter(|date| !date.is_empty())
+        .unwrap_or(value)
+}
+
+fn star_icon(filled: bool) -> Markup {
+    html! {
+        svg viewBox="0 0 24 24" fill=(if filled { "currentColor" } else { "none" }) stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" {
+            polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" {}
+        }
+    }
+}
+
+fn trash_icon() -> Markup {
+    html! {
+        svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" {
+            path d="M3 6h18" {}
+            path d="M8 6V4h8v2" {}
+            path d="M19 6l-1 14H6L5 6" {}
+            path d="M10 11v6" {}
+            path d="M14 11v6" {}
         }
     }
 }
@@ -949,20 +998,28 @@ fn detail_meta(ctx: &PageContext, label: Text, value: &str) -> Markup {
     }
 }
 
-fn message_body_panel(ctx: &PageContext, title: Text, value: &str) -> Markup {
-    match value.is_empty() {
-        true => html! {},
-        false => html! {
+fn primary_message_body(ctx: &PageContext, message: &crate::MessageDetailRow) -> Markup {
+    if !message.text.trim().is_empty() {
+        return html! {
             section class="panel" {
-                h2 { (text(ctx.lang, title)) }
-                pre class="message-body" { (value) }
+                h2 { (text(ctx.lang, Text::Body)) }
+                pre class="message-body" { (&message.text) }
             }
-        },
+        };
     }
+    if !message.html.trim().is_empty() {
+        return html! {
+            section class="panel" {
+                h2 { (text(ctx.lang, Text::Body)) }
+                iframe class="message-html" sandbox="" referrerpolicy="no-referrer" srcdoc=(&message.html) {}
+            }
+        };
+    }
+    message_body_status(ctx, message)
 }
 
 fn message_body_status(ctx: &PageContext, message: &crate::MessageDetailRow) -> Markup {
-    if !message.text.is_empty() || !message.html.is_empty() {
+    if !message.text.trim().is_empty() || !message.html.trim().is_empty() {
         return html! {};
     }
     html! {
@@ -979,29 +1036,61 @@ fn message_body_status(ctx: &PageContext, message: &crate::MessageDetailRow) -> 
     }
 }
 
-fn body_status_state(message: &crate::MessageDetailRow) -> &'static str {
-    match message.detail_error.is_empty() && message.detail_loaded {
-        true => "",
-        false => "error",
+fn message_detail_summary(ctx: &PageContext, message: &crate::MessageDetailRow) -> Markup {
+    html! {
+        section class="panel" {
+            details class="message-details" {
+                summary { (text(ctx.lang, Text::Details)) }
+                dl {
+                    (detail_pair(ctx, Text::Email, &message.mailbox))
+                    (detail_code_pair(ctx, Text::ProviderId, &message.provider_id))
+                    (detail_pair(ctx, Text::Status, message_status_text(ctx, &message.status)))
+                    (detail_pair(ctx, Text::From, &message.from))
+                    (detail_pair(ctx, Text::To, &message.to))
+                    (detail_pair(ctx, Text::Cc, &message.cc))
+                    (detail_pair(ctx, Text::Bcc, &message.bcc))
+                    (detail_pair(ctx, Text::ReplyTo, &message.reply_to))
+                    (detail_pair(ctx, Text::ReceivedAt, &message.received_at))
+                    (detail_pair(ctx, Text::DetailFetchFailed, &message.detail_error))
+                    @if !message.html.is_empty() && message.html != message.text {
+                        dt { (text(ctx.lang, Text::Html)) }
+                        dd { pre class="message-body" { (&message.html) } }
+                    }
+                    (detail_headers(ctx, &message.headers))
+                    (detail_attachments(ctx, &message.attachments))
+                    (raw_message_detail(ctx, message))
+                }
+            }
+        }
     }
 }
 
-fn body_status_text(ctx: &PageContext, message: &crate::MessageDetailRow) -> &'static str {
-    if !message.detail_error.is_empty() {
-        return text(ctx.lang, Text::DetailFetchFailed);
-    }
-    match message.detail_loaded {
-        true => text(ctx.lang, Text::ProviderDidNotReturnBody),
-        false => text(ctx.lang, Text::BodyUnavailable),
+fn detail_pair(ctx: &PageContext, label: Text, value: &str) -> Markup {
+    match value.is_empty() {
+        true => html! {},
+        false => html! {
+            dt { (text(ctx.lang, label)) }
+            dd { (value) }
+        },
     }
 }
 
-fn headers_panel(ctx: &PageContext, headers: &[crate::MessageHeaderRow]) -> Markup {
+fn detail_code_pair(ctx: &PageContext, label: Text, value: &str) -> Markup {
+    match value.is_empty() {
+        true => html! {},
+        false => html! {
+            dt { (text(ctx.lang, label)) }
+            dd { code class="endpoint" { (value) } }
+        },
+    }
+}
+
+fn detail_headers(ctx: &PageContext, headers: &[crate::MessageHeaderRow]) -> Markup {
     match headers.is_empty() {
         true => html! {},
         false => html! {
-            section class="panel" {
-                h2 { (text(ctx.lang, Text::Headers)) }
+            dt { (text(ctx.lang, Text::Headers)) }
+            dd {
                 div class="table-wrap" {
                     table class="table" {
                         tbody {
@@ -1019,12 +1108,12 @@ fn headers_panel(ctx: &PageContext, headers: &[crate::MessageHeaderRow]) -> Mark
     }
 }
 
-fn attachments_panel(ctx: &PageContext, attachments: &[crate::MessageAttachmentRow]) -> Markup {
+fn detail_attachments(ctx: &PageContext, attachments: &[crate::MessageAttachmentRow]) -> Markup {
     match attachments.is_empty() {
         true => html! {},
         false => html! {
-            section class="panel" {
-                h2 { (text(ctx.lang, Text::Attachments)) }
+            dt { (text(ctx.lang, Text::Attachments)) }
+            dd {
                 div class="table-wrap" {
                     table class="table" {
                         thead {
@@ -1049,6 +1138,40 @@ fn attachments_panel(ctx: &PageContext, attachments: &[crate::MessageAttachmentR
                 }
             }
         },
+    }
+}
+
+fn raw_message_detail(ctx: &PageContext, message: &crate::MessageDetailRow) -> Markup {
+    match message.raw_download_url.is_empty() {
+        true => html! {},
+        false => html! {
+            dt { (text(ctx.lang, Text::RawMessage)) }
+            dd {
+                @if !message.raw_expires_at.is_empty() {
+                    p { (text(ctx.lang, Text::ExpiresAt)) ": " (&message.raw_expires_at) }
+                }
+                a href=(&message.raw_download_url) target="_blank" rel="noopener noreferrer" {
+                    (&message.raw_download_url)
+                }
+            }
+        },
+    }
+}
+
+fn body_status_state(message: &crate::MessageDetailRow) -> &'static str {
+    match message.detail_error.is_empty() && message.detail_loaded {
+        true => "",
+        false => "error",
+    }
+}
+
+fn body_status_text(ctx: &PageContext, message: &crate::MessageDetailRow) -> &'static str {
+    if !message.detail_error.is_empty() {
+        return text(ctx.lang, Text::DetailFetchFailed);
+    }
+    match message.detail_loaded {
+        true => text(ctx.lang, Text::ProviderDidNotReturnBody),
+        false => text(ctx.lang, Text::BodyUnavailable),
     }
 }
 
@@ -1384,21 +1507,38 @@ fn mail_topbar(ctx: &PageContext, email: &str) -> Markup {
     html! {
         header class="mail-topbar" {
             a class="mail-brand" href=(localized_path(ctx, "/portal")) {
-                span class="mark" aria-hidden="true" { "R" }
+                (brand_mark())
                 span { "RNovEmail" }
             }
             nav class="mail-primary-nav" aria-label=(text(ctx.lang, Text::Portal)) {
                 a class="button secondary" href="#inbox" { (text(ctx.lang, Text::Inbox)) }
                 a class="button secondary" href="#sent" { (text(ctx.lang, Text::Sent)) }
                 a class="button" href="#compose" { (text(ctx.lang, Text::Compose)) }
-                button class="button secondary" type="button" data-draft-action="open" data-draft-form="portal-compose" {
-                    (text(ctx.lang, Text::Drafts))
-                }
             }
             div class="mail-user" {
                 span class="mail-address" { (email) }
                 (avatar_menu(ctx, email))
             }
+        }
+    }
+}
+
+fn brand_mark() -> Markup {
+    html! {
+        svg id="rnovemail-logo" class="mark logo-mark" viewBox="0 0 40 40" role="img" aria-label="RNovEmail" {
+            defs {
+                linearGradient id="rnovemail-logo-gradient" x1="6" y1="34" x2="34" y2="6" gradientUnits="userSpaceOnUse" {
+                    stop offset="0%" stop-color="#14b8a6" {}
+                    stop offset="52%" stop-color="#2563eb" {}
+                    stop offset="100%" stop-color="#8b5cf6" {}
+                }
+            }
+            rect x="3" y="3" width="34" height="34" rx="9" fill="url(#rnovemail-logo-gradient)" {}
+            path d="M10.5 15.5h19v13h-19z" fill="#ffffff" opacity="0.18" {}
+            path d="M10.5 15.5h19v13h-19z" fill="none" stroke="#ffffff" stroke-width="2" stroke-linejoin="round" {}
+            path d="M11.5 16.5 20 22.5l8.5-6" fill="none" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" {}
+            path d="M23.5 18.5 28.5 12.5" fill="none" stroke="#ffffff" stroke-width="2" stroke-linecap="round" {}
+            circle cx="30" cy="11" r="3.2" fill="#ffffff" {}
         }
     }
 }
@@ -1429,7 +1569,7 @@ fn app_layout(ctx: &PageContext, title: &str, admin: bool, content: Markup) -> M
             div class="shell" {
                 aside class="side" {
                     div class="brand" {
-                        span class="mark" aria-hidden="true" { "R" }
+                        (brand_mark())
                         span { "RNovEmail" }
                     }
                     @if admin { (admin_nav(ctx)) }

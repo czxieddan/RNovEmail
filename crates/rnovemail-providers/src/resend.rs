@@ -386,9 +386,9 @@ struct ResendEmailSummary {
 struct ResendSentEmailResponse {
     #[serde(default)]
     id: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_optional_address")]
     from: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_address_list")]
     to: Vec<String>,
     #[serde(default)]
     subject: Option<String>,
@@ -400,6 +400,55 @@ struct ResendSentEmailResponse {
     created_at: Option<String>,
     #[serde(default, alias = "lastEvent")]
     last_event: Option<String>,
+}
+
+fn deserialize_optional_address<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(value.and_then(owned_address_value))
+}
+
+fn deserialize_address_list<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(value.map(address_values).unwrap_or_default())
+}
+
+fn address_values(value: serde_json::Value) -> Vec<String> {
+    match value {
+        serde_json::Value::Array(values) => {
+            values.into_iter().filter_map(owned_address_value).collect()
+        }
+        value => owned_address_value(value).into_iter().collect(),
+    }
+}
+
+fn owned_address_value(value: serde_json::Value) -> Option<String> {
+    match value {
+        serde_json::Value::String(value) => non_empty_text(value),
+        serde_json::Value::Object(values) => object_address_value(&values),
+        _ => None,
+    }
+}
+
+fn object_address_value(values: &serde_json::Map<String, serde_json::Value>) -> Option<String> {
+    values
+        .get("email")
+        .or_else(|| values.get("address"))
+        .and_then(|value| value.as_str())
+        .and_then(|value| non_empty_text(value.to_string()))
+}
+
+fn non_empty_text(value: String) -> Option<String> {
+    let trimmed = value.trim();
+    match trimmed.is_empty() {
+        true => None,
+        false => Some(trimmed.to_string()),
+    }
 }
 
 impl ResendSentEmailResponse {
@@ -421,15 +470,19 @@ impl ResendSentEmailResponse {
 struct ResendReceivedEmailResponse {
     #[serde(default)]
     id: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_optional_address")]
     from: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_address_list")]
     to: Vec<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_address_list")]
     cc: Vec<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_address_list")]
     bcc: Vec<String>,
-    #[serde(default, alias = "replyTo")]
+    #[serde(
+        default,
+        alias = "replyTo",
+        deserialize_with = "deserialize_address_list"
+    )]
     reply_to: Vec<String>,
     #[serde(default)]
     subject: Option<String>,
@@ -590,9 +643,40 @@ fn bracketed_email(value: &str) -> Option<&str> {
 
 fn parse_history_time(value: Option<&str>) -> DateTime<Utc> {
     value
-        .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
-        .map(|value| value.with_timezone(&Utc))
+        .and_then(parse_history_time_value)
         .unwrap_or_else(Utc::now)
+}
+
+fn parse_history_time_value(value: &str) -> Option<DateTime<Utc>> {
+    parse_rfc3339_utc(value).or_else(|| parse_rfc3339_utc(&normalized_resend_time(value)))
+}
+
+fn parse_rfc3339_utc(value: &str) -> Option<DateTime<Utc>> {
+    DateTime::parse_from_rfc3339(value)
+        .ok()
+        .map(|value| value.with_timezone(&Utc))
+}
+
+fn normalized_resend_time(value: &str) -> String {
+    let mut normalized = value.trim().replacen(' ', "T", 1);
+    if has_short_timezone_offset(&normalized) {
+        normalized.push_str(":00");
+    }
+    normalized
+}
+
+fn has_short_timezone_offset(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    let Some(sign_index) = bytes.len().checked_sub(3) else {
+        return false;
+    };
+    is_offset_sign(bytes[sign_index])
+        && bytes[sign_index + 1].is_ascii_digit()
+        && bytes[sign_index + 2].is_ascii_digit()
+}
+
+fn is_offset_sign(value: u8) -> bool {
+    value == b'+' || value == b'-'
 }
 
 fn event_status(value: Option<&str>) -> MessageStatus {
