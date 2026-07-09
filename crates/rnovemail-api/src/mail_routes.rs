@@ -1,13 +1,13 @@
 use axum::{
     Json, Router,
     extract::{Path, State},
-    http::HeaderMap,
+    http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
-    routing::{get, post},
+    routing::{delete, get, post},
 };
 use rnovemail_domain::{
-    EmailAddress, InboundMessage, InboundMessageDetail, MessageId, OutboundMessage,
-    ProviderAccount, ProviderType,
+    EmailAddress, InboundMessage, InboundMessageDetail, MessageDirection, MessageId,
+    OutboundMessage, ProviderAccount, ProviderType,
 };
 use rnovemail_providers::SendMailRequest;
 use serde::{Deserialize, Serialize};
@@ -18,6 +18,14 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/api/v1/mail/send", post(send_mail))
         .route("/api/v1/portal/mail/send", post(send_portal_mail))
+        .route(
+            "/api/v1/portal/mail/{direction}/{id}",
+            delete(delete_portal_mail),
+        )
+        .route(
+            "/api/v1/portal/mail/{direction}/{id}/favorite",
+            post(favorite_portal_mail),
+        )
         .route("/api/v1/mail/outbound/{id}", get(get_outbound))
         .route("/api/v1/mail/inbound/{id}", get(get_inbound))
 }
@@ -69,6 +77,35 @@ async fn get_inbound(
     inbound_response(&state, &id).await.into_response()
 }
 
+async fn delete_portal_mail(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((direction, id)): Path<(String, String)>,
+) -> Response {
+    let principal = match state.user_principal(&headers) {
+        Ok(principal) => principal,
+        Err(rejection) => return rejection.into_response(),
+    };
+    delete_portal_mail_response(&state, &principal.subject, &direction, &id)
+        .await
+        .into_response()
+}
+
+async fn favorite_portal_mail(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((direction, id)): Path<(String, String)>,
+    Json(request): Json<FavoriteMailRequest>,
+) -> Response {
+    let principal = match state.user_principal(&headers) {
+        Ok(principal) => principal,
+        Err(rejection) => return rejection.into_response(),
+    };
+    favorite_portal_mail_response(&state, &principal.subject, &direction, &id, request.starred)
+        .await
+        .into_response()
+}
+
 async fn send_mail_response(
     state: &AppState,
     request: SendMailApiRequest,
@@ -88,6 +125,40 @@ async fn send_user_mail_response(
     Ok(Json(SendMailResponse::sent(provider, receipt)))
 }
 
+async fn delete_portal_mail_response(
+    state: &AppState,
+    user_email: &str,
+    direction: &str,
+    provider_message_id: &str,
+) -> Result<StatusCode, ApiRejection> {
+    state
+        .mark_user_message_deleted(
+            user_email,
+            portal_direction(direction)?,
+            provider_message_id,
+        )
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn favorite_portal_mail_response(
+    state: &AppState,
+    user_email: &str,
+    direction: &str,
+    provider_message_id: &str,
+    starred: bool,
+) -> Result<StatusCode, ApiRejection> {
+    state
+        .set_user_message_starred(
+            user_email,
+            portal_direction(direction)?,
+            provider_message_id,
+            starred,
+        )
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 #[derive(Deserialize)]
 struct SendMailApiRequest {
     from: String,
@@ -95,6 +166,11 @@ struct SendMailApiRequest {
     subject: String,
     text: String,
     html: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct FavoriteMailRequest {
+    starred: bool,
 }
 
 impl SendMailApiRequest {
@@ -138,6 +214,7 @@ struct InboundMessageResponse {
 struct OutboundMessageResponse {
     id: String,
     provider_account_id: String,
+    provider_message_id: Option<String>,
     from: String,
     to: Vec<String>,
     subject: String,
@@ -200,6 +277,7 @@ impl OutboundMessageResponse {
         Self {
             id: serialized_key(&message.id),
             provider_account_id: serialized_key(&message.provider_account_id),
+            provider_message_id: message.provider_message_id,
             from: message.from.as_str().to_string(),
             to: message
                 .to
@@ -233,6 +311,14 @@ fn build_mail_request(
         None => builder,
     };
     builder.build().map_err(|_| ApiRejection::BadRequest)
+}
+
+fn portal_direction(value: &str) -> Result<MessageDirection, ApiRejection> {
+    match value {
+        "inbound" => Ok(MessageDirection::Inbound),
+        "outbound" => Ok(MessageDirection::Outbound),
+        _ => Err(ApiRejection::BadRequest),
+    }
 }
 
 fn provider_type_name(provider_type: ProviderType) -> &'static str {

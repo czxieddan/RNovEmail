@@ -1,16 +1,18 @@
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use reqwest::Client;
 use rnovemail_domain::{
     EmailAddress, InboundMessageAttachment, InboundMessageDetail, InboundMessageHeader,
-    InboundMessageRaw, MessageId, ProviderType,
+    InboundMessageRaw, MessageId, MessageStatus, ProviderType,
 };
 use rnovemail_webhook::SignatureVerifier;
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    MailProvider, ProviderError, ProviderEvent, ProviderSendReceipt, ProviderWebhookRequest,
-    SendMailRequest, VerifiedWebhook,
+    MailProvider, ProviderError, ProviderEvent, ProviderInboundHistoryItem,
+    ProviderOutboundHistoryItem, ProviderSendReceipt, ProviderWebhookRequest, SendMailRequest,
+    VerifiedWebhook,
 };
 
 const USER_AGENT: &str = concat!("RNovEmail/", env!("CARGO_PKG_VERSION"));
@@ -68,6 +70,75 @@ impl ResendProvider {
             .await
             .map_err(|_| ProviderError::InvalidPayload)?;
         Ok(received.into_detail())
+    }
+
+    pub async fn list_sent_emails(
+        &self,
+    ) -> Result<Vec<ProviderOutboundHistoryItem>, ProviderError> {
+        let summaries = self
+            .get_json::<ResendListResponse<ResendEmailSummary>>(sent_emails_endpoint(
+                &self.endpoint,
+            ))
+            .await?;
+        let mut messages = Vec::new();
+        for summary in summaries.data {
+            messages.push(self.retrieve_sent_email(&summary.id).await?);
+        }
+        Ok(messages)
+    }
+
+    pub async fn retrieve_sent_email(
+        &self,
+        email_id: &str,
+    ) -> Result<ProviderOutboundHistoryItem, ProviderError> {
+        self.get_json::<ResendSentEmailResponse>(sent_email_endpoint(&self.endpoint, email_id))
+            .await?
+            .into_history(email_id)
+    }
+
+    pub async fn list_received_emails(
+        &self,
+    ) -> Result<Vec<ProviderInboundHistoryItem>, ProviderError> {
+        let summaries = self
+            .get_json::<ResendListResponse<ResendEmailSummary>>(received_emails_endpoint(
+                &self.endpoint,
+            ))
+            .await?;
+        let mut messages = Vec::new();
+        for summary in summaries.data {
+            messages.push(self.retrieve_received_history_email(&summary.id).await?);
+        }
+        Ok(messages)
+    }
+
+    pub async fn retrieve_received_history_email(
+        &self,
+        email_id: &str,
+    ) -> Result<ProviderInboundHistoryItem, ProviderError> {
+        self.get_json::<ResendReceivedEmailResponse>(received_email_endpoint(
+            &self.endpoint,
+            email_id,
+        ))
+        .await?
+        .into_history(email_id)
+    }
+
+    async fn get_json<T: serde::de::DeserializeOwned>(
+        &self,
+        url: String,
+    ) -> Result<T, ProviderError> {
+        let response = self
+            .client
+            .get(url)
+            .bearer_auth(self.api_key.expose_secret())
+            .send()
+            .await
+            .map_err(|_| ProviderError::provider_rejected())?;
+        ensure_success(response.status())?;
+        response
+            .json::<T>()
+            .await
+            .map_err(|_| ProviderError::InvalidPayload)
     }
 }
 
@@ -158,6 +229,18 @@ impl<'a> ResendSendPayload<'a> {
 
 fn send_endpoint(endpoint: &str) -> String {
     format!("{}/emails", endpoint.trim_end_matches('/'))
+}
+
+fn sent_emails_endpoint(endpoint: &str) -> String {
+    format!("{}/emails", endpoint.trim_end_matches('/'))
+}
+
+fn sent_email_endpoint(endpoint: &str, email_id: &str) -> String {
+    format!("{}/emails/{email_id}", endpoint.trim_end_matches('/'))
+}
+
+fn received_emails_endpoint(endpoint: &str) -> String {
+    format!("{}/emails/receiving", endpoint.trim_end_matches('/'))
 }
 
 fn received_email_endpoint(endpoint: &str, email_id: &str) -> String {
@@ -289,7 +372,55 @@ fn inbound_text(value: &serde_json::Value) -> &str {
 }
 
 #[derive(Deserialize)]
+struct ResendListResponse<T> {
+    #[serde(default)]
+    data: Vec<T>,
+}
+
+#[derive(Default, Deserialize)]
+struct ResendEmailSummary {
+    id: String,
+}
+
+#[derive(Deserialize)]
+struct ResendSentEmailResponse {
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
+    from: Option<String>,
+    #[serde(default)]
+    to: Vec<String>,
+    #[serde(default)]
+    subject: Option<String>,
+    #[serde(default, alias = "text_body", alias = "textBody")]
+    text: Option<String>,
+    #[serde(default, alias = "html_body", alias = "htmlBody")]
+    html: Option<String>,
+    #[serde(default, alias = "createdAt")]
+    created_at: Option<String>,
+    #[serde(default, alias = "lastEvent")]
+    last_event: Option<String>,
+}
+
+impl ResendSentEmailResponse {
+    fn into_history(self, fallback_id: &str) -> Result<ProviderOutboundHistoryItem, ProviderError> {
+        Ok(ProviderOutboundHistoryItem {
+            provider_message_id: self.id.unwrap_or_else(|| fallback_id.to_string()),
+            from: parse_history_address(&required_text(self.from)?)?,
+            to: parse_history_addresses(self.to)?,
+            subject: self.subject.unwrap_or_default(),
+            text: self.text.unwrap_or_default(),
+            html: self.html,
+            status: event_status(self.last_event.as_deref()),
+            created_at: parse_history_time(self.created_at.as_deref()),
+        })
+    }
+}
+
+#[derive(Deserialize)]
 struct ResendReceivedEmailResponse {
+    #[serde(default)]
+    id: Option<String>,
     #[serde(default)]
     from: Option<String>,
     #[serde(default)]
@@ -312,6 +443,8 @@ struct ResendReceivedEmailResponse {
     attachments: Vec<ResendReceivedAttachment>,
     #[serde(default)]
     raw: Option<ResendReceivedRaw>,
+    #[serde(default, alias = "createdAt")]
+    created_at: Option<String>,
 }
 
 impl ResendReceivedEmailResponse {
@@ -333,6 +466,21 @@ impl ResendReceivedEmailResponse {
                 .collect(),
             raw: self.raw.map(ResendReceivedRaw::into_raw),
         }
+    }
+
+    fn into_history(self, fallback_id: &str) -> Result<ProviderInboundHistoryItem, ProviderError> {
+        let provider_message_id = self.id.clone().unwrap_or_else(|| fallback_id.to_string());
+        let created_at = parse_history_time(self.created_at.as_deref());
+        let detail = self.into_detail();
+        Ok(ProviderInboundHistoryItem {
+            provider_message_id,
+            from: parse_history_address(&detail.from)?,
+            to: parse_history_addresses(detail.to.clone())?,
+            subject: detail.subject.clone(),
+            text: detail.text.clone(),
+            detail,
+            received_at: created_at,
+        })
     }
 }
 
@@ -405,4 +553,54 @@ fn object_headers(values: serde_json::Map<String, serde_json::Value>) -> Vec<Inb
             })
         })
         .collect()
+}
+
+fn required_text(value: Option<String>) -> Result<String, ProviderError> {
+    value
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .ok_or(ProviderError::InvalidPayload)
+}
+
+fn parse_history_addresses(values: Vec<String>) -> Result<Vec<EmailAddress>, ProviderError> {
+    let parsed = values
+        .iter()
+        .map(|value| parse_history_address(value))
+        .collect::<Result<Vec<_>, _>>()?;
+    reject_empty_inbound_recipients(parsed)
+}
+
+fn parse_history_address(value: &str) -> Result<EmailAddress, ProviderError> {
+    EmailAddress::parse(display_address_email(value)).map_err(|_| ProviderError::InvalidPayload)
+}
+
+fn display_address_email(value: &str) -> &str {
+    let trimmed = value.trim();
+    match bracketed_email(trimmed) {
+        Some(email) => email,
+        None => trimmed,
+    }
+}
+
+fn bracketed_email(value: &str) -> Option<&str> {
+    let start = value.find('<')?;
+    let end = value[start + 1..].find('>')? + start + 1;
+    value.get(start + 1..end).map(str::trim)
+}
+
+fn parse_history_time(value: Option<&str>) -> DateTime<Utc> {
+    value
+        .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+        .map(|value| value.with_timezone(&Utc))
+        .unwrap_or_else(Utc::now)
+}
+
+fn event_status(value: Option<&str>) -> MessageStatus {
+    match value.unwrap_or_default().to_ascii_lowercase().as_str() {
+        "delivered" | "email.delivered" => MessageStatus::Delivered,
+        "bounced" | "email.bounced" => MessageStatus::Bounced,
+        "complained" | "email.complained" => MessageStatus::Complained,
+        "failed" => MessageStatus::Failed,
+        _ => MessageStatus::Sent,
+    }
 }

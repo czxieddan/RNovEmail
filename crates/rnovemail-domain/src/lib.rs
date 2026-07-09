@@ -12,7 +12,8 @@ pub use email::EmailAddress;
 pub use mailbox::{Mailbox, MailboxId, MailboxStatus};
 pub use message::{
     InboundMessage, InboundMessageAttachment, InboundMessageDetail, InboundMessageHeader,
-    InboundMessageRaw, MessageId, MessageStatus, MessageTimelineEntry, OutboundMessage,
+    InboundMessageRaw, MessageDirection, MessageId, MessageStatus, MessageTimelineEntry,
+    MessageUserState, OutboundMessage,
 };
 pub use provider::{ProviderAccount, ProviderAccountId, ProviderType};
 pub use user::{User, UserId, UserRole, UserStatus};

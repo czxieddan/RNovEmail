@@ -8,12 +8,14 @@ use chrono::Utc;
 use rnovemail_auth::verify_login_secret;
 use rnovemail_domain::{
     AuditActor, AuditEvent, AuditResult, DomainName, EmailAddress, InboundMessage,
-    InboundMessageDetail, Mailbox, MailboxId, MailboxStatus, MessageStatus, MessageTimelineEntry,
-    OutboundMessage, ProviderAccount, ProviderAccountId, ProviderType, User, UserRole, UserStatus,
+    InboundMessageDetail, Mailbox, MailboxId, MailboxStatus, MessageDirection, MessageStatus,
+    MessageTimelineEntry, MessageUserState, OutboundMessage, ProviderAccount, ProviderAccountId,
+    ProviderType, User, UserRole, UserStatus,
 };
 use rnovemail_providers::{
-    MailProvider, ProviderError, ProviderEvent, ProviderSendReceipt, ProviderWebhookRequest,
-    ResendProvider, SendMailRequest,
+    MailProvider, ProviderError, ProviderEvent, ProviderInboundHistoryItem,
+    ProviderOutboundHistoryItem, ProviderSendReceipt, ProviderWebhookRequest, ResendProvider,
+    SendMailRequest,
 };
 use rnovemail_store::{AppStore, StoreError};
 use rnovemail_webhook::SignatureVerifier;
@@ -51,6 +53,7 @@ struct AppData {
     mailboxes: HashMap<String, Mailbox>,
     outbound_messages: HashMap<String, OutboundMessage>,
     inbound_messages: HashMap<String, InboundMessage>,
+    message_user_states: HashMap<String, MessageUserState>,
     webhook_bindings: HashMap<String, WebhookBinding>,
     webhook_events: HashSet<String>,
     audit_events: Vec<AuditEvent>,
@@ -233,6 +236,11 @@ impl AppState {
         Ok(data.inbound_messages.values().cloned().collect())
     }
 
+    pub(crate) fn list_message_user_states(&self) -> Result<Vec<MessageUserState>, ApiRejection> {
+        let data = self.read_data()?;
+        Ok(data.message_user_states.values().cloned().collect())
+    }
+
     pub(crate) fn inbound_message_by_id(&self, id: &str) -> Result<InboundMessage, ApiRejection> {
         let data = self.read_data()?;
         data.inbound_messages
@@ -260,6 +268,46 @@ impl AppState {
             Ok(None) => InboundMessageView::ready(message),
             Err(error) => InboundMessageView::failed(message, error.code()),
         }
+    }
+
+    pub(crate) async fn sync_user_mail_history(
+        &self,
+        user_email: &str,
+    ) -> Result<(), ApiRejection> {
+        let user_email = EmailAddress::parse(user_email).map_err(|_| ApiRejection::BadRequest)?;
+        let owned_mailboxes = self.owned_mailboxes(&user_email)?;
+        let providers = self.providers_for_mailboxes(&owned_mailboxes)?;
+        for provider in providers {
+            let _ = self
+                .sync_provider_history(&user_email, &owned_mailboxes, &provider)
+                .await;
+        }
+        Ok(())
+    }
+
+    pub(crate) async fn mark_user_message_deleted(
+        &self,
+        user_email: &str,
+        direction: MessageDirection,
+        provider_message_id: &str,
+    ) -> Result<(), ApiRejection> {
+        let mut state = self.message_user_state(user_email, direction, provider_message_id)?;
+        state.mark_deleted();
+        self.persist_message_user_state(&state).await?;
+        self.insert_message_user_state(state)
+    }
+
+    pub(crate) async fn set_user_message_starred(
+        &self,
+        user_email: &str,
+        direction: MessageDirection,
+        provider_message_id: &str,
+        starred: bool,
+    ) -> Result<(), ApiRejection> {
+        let mut state = self.message_user_state(user_email, direction, provider_message_id)?;
+        state.set_starred(starred);
+        self.persist_message_user_state(&state).await?;
+        self.insert_message_user_state(state)
     }
 
     pub(crate) fn list_audit(&self) -> Result<Vec<AuditEvent>, ApiRejection> {
@@ -483,6 +531,237 @@ impl AppState {
         let mut data = self.write_data()?;
         data.outbound_messages
             .insert(serialized_key(&message.id), message);
+        Ok(())
+    }
+
+    fn owned_mailboxes(&self, user_email: &EmailAddress) -> Result<Vec<Mailbox>, ApiRejection> {
+        let user = self.user_by_email(user_email)?;
+        Ok(self
+            .list_mailboxes()?
+            .into_iter()
+            .filter(|mailbox| mailbox.owner_id() == user.id())
+            .collect())
+    }
+
+    fn providers_for_mailboxes(
+        &self,
+        mailboxes: &[Mailbox],
+    ) -> Result<Vec<ProviderAccount>, ApiRejection> {
+        Ok(self
+            .list_providers()?
+            .into_iter()
+            .filter(|provider| provider_matches_mailboxes(provider, mailboxes))
+            .collect())
+    }
+
+    async fn sync_provider_history(
+        &self,
+        user_email: &EmailAddress,
+        mailboxes: &[Mailbox],
+        provider: &ProviderAccount,
+    ) -> Result<(), ApiRejection> {
+        match provider.provider_type() {
+            ProviderType::Resend => {
+                self.sync_resend_history(user_email, mailboxes, provider)
+                    .await
+            }
+        }
+    }
+
+    async fn sync_resend_history(
+        &self,
+        user_email: &EmailAddress,
+        mailboxes: &[Mailbox],
+        provider: &ProviderAccount,
+    ) -> Result<(), ApiRejection> {
+        let Some(resend) = self.resend_history_provider(provider)? else {
+            return Ok(());
+        };
+        self.sync_resend_outbound(user_email, mailboxes, provider, &resend)
+            .await?;
+        self.sync_resend_inbound(user_email, mailboxes, provider, &resend)
+            .await
+    }
+
+    fn resend_history_provider(
+        &self,
+        provider: &ProviderAccount,
+    ) -> Result<Option<ResendProvider>, ApiRejection> {
+        let Some(api_key) = provider.api_key() else {
+            return Ok(None);
+        };
+        Ok(Some(ResendProvider::with_endpoint(
+            SecretString::new(api_key.to_string()),
+            self.resend_endpoint()?,
+        )))
+    }
+
+    async fn sync_resend_outbound(
+        &self,
+        user_email: &EmailAddress,
+        mailboxes: &[Mailbox],
+        provider: &ProviderAccount,
+        resend: &ResendProvider,
+    ) -> Result<(), ApiRejection> {
+        for item in resend.list_sent_emails().await.map_err(provider_error)? {
+            self.remember_outbound_history(user_email, mailboxes, provider, item)
+                .await?;
+        }
+        Ok(())
+    }
+
+    async fn sync_resend_inbound(
+        &self,
+        user_email: &EmailAddress,
+        mailboxes: &[Mailbox],
+        provider: &ProviderAccount,
+        resend: &ResendProvider,
+    ) -> Result<(), ApiRejection> {
+        for item in resend
+            .list_received_emails()
+            .await
+            .map_err(provider_error)?
+        {
+            self.remember_inbound_history(user_email, mailboxes, provider, item)
+                .await?;
+        }
+        Ok(())
+    }
+
+    async fn remember_outbound_history(
+        &self,
+        user_email: &EmailAddress,
+        mailboxes: &[Mailbox],
+        provider: &ProviderAccount,
+        item: ProviderOutboundHistoryItem,
+    ) -> Result<(), ApiRejection> {
+        if !owned_sender(mailboxes, &item.from) || self.outbound_history_known(user_email, &item)? {
+            return Ok(());
+        }
+        let message = outbound_history_message(provider, item);
+        self.persist_outbound_message(&message).await?;
+        self.insert_outbound_message(message)
+    }
+
+    async fn remember_inbound_history(
+        &self,
+        user_email: &EmailAddress,
+        mailboxes: &[Mailbox],
+        provider: &ProviderAccount,
+        item: ProviderInboundHistoryItem,
+    ) -> Result<(), ApiRejection> {
+        let Some(mailbox) = inbound_history_mailbox(mailboxes, &item) else {
+            return Ok(());
+        };
+        if self.inbound_history_known(user_email, &item)? {
+            return Ok(());
+        }
+        let message = inbound_history_message(provider.id(), mailbox.id(), item);
+        self.persist_inbound_message(&message).await?;
+        self.insert_inbound_message(message)
+    }
+
+    fn outbound_history_known(
+        &self,
+        user_email: &EmailAddress,
+        item: &ProviderOutboundHistoryItem,
+    ) -> Result<bool, ApiRejection> {
+        Ok(self.message_deleted(
+            user_email,
+            MessageDirection::Outbound,
+            &item.provider_message_id,
+        )? || self.has_outbound_provider_message(&item.provider_message_id)?)
+    }
+
+    fn inbound_history_known(
+        &self,
+        user_email: &EmailAddress,
+        item: &ProviderInboundHistoryItem,
+    ) -> Result<bool, ApiRejection> {
+        Ok(self.message_deleted(
+            user_email,
+            MessageDirection::Inbound,
+            &item.provider_message_id,
+        )? || self.has_inbound_provider_message(&item.provider_message_id)?)
+    }
+
+    fn has_outbound_provider_message(
+        &self,
+        provider_message_id: &str,
+    ) -> Result<bool, ApiRejection> {
+        let data = self.read_data()?;
+        Ok(data
+            .outbound_messages
+            .values()
+            .any(|message| outbound_provider_message_id(message) == provider_message_id))
+    }
+
+    fn has_inbound_provider_message(
+        &self,
+        provider_message_id: &str,
+    ) -> Result<bool, ApiRejection> {
+        let data = self.read_data()?;
+        Ok(data
+            .inbound_messages
+            .values()
+            .any(|message| message.provider_event_id == provider_message_id))
+    }
+
+    fn message_deleted(
+        &self,
+        user_email: &EmailAddress,
+        direction: MessageDirection,
+        provider_message_id: &str,
+    ) -> Result<bool, ApiRejection> {
+        let data = self.read_data()?;
+        Ok(data
+            .message_user_states
+            .get(&message_state_key(
+                user_email,
+                direction,
+                provider_message_id,
+            ))
+            .map(|state| state.deleted)
+            .unwrap_or(false))
+    }
+
+    fn message_user_state(
+        &self,
+        user_email: &str,
+        direction: MessageDirection,
+        provider_message_id: &str,
+    ) -> Result<MessageUserState, ApiRejection> {
+        let email = EmailAddress::parse(user_email).map_err(|_| ApiRejection::BadRequest)?;
+        let key = message_state_key(&email, direction, provider_message_id);
+        Ok(self
+            .read_data()?
+            .message_user_states
+            .get(&key)
+            .cloned()
+            .unwrap_or_else(|| MessageUserState::new(email, direction, provider_message_id)))
+    }
+
+    async fn persist_message_user_state(
+        &self,
+        state: &MessageUserState,
+    ) -> Result<(), ApiRejection> {
+        if let Some(store) = self.store() {
+            store
+                .put_message_user_state(state.clone())
+                .await
+                .map_err(store_error)?;
+        }
+        Ok(())
+    }
+
+    fn insert_message_user_state(&self, state: MessageUserState) -> Result<(), ApiRejection> {
+        let key = message_state_key(
+            &state.user_email,
+            state.direction,
+            &state.provider_message_id,
+        );
+        let mut data = self.write_data()?;
+        data.message_user_states.insert(key, state);
         Ok(())
     }
 
@@ -1211,6 +1490,60 @@ fn provider_type_name(provider_type: ProviderType) -> &'static str {
     }
 }
 
+fn provider_matches_mailboxes(provider: &ProviderAccount, mailboxes: &[Mailbox]) -> bool {
+    mailboxes
+        .iter()
+        .any(|mailbox| provider.serves_domain(mailbox.address().domain()))
+}
+
+fn owned_sender(mailboxes: &[Mailbox], sender: &EmailAddress) -> bool {
+    mailboxes
+        .iter()
+        .any(|mailbox| mailbox.address() == sender && mailbox.outbound_enabled())
+}
+
+fn inbound_history_mailbox(
+    mailboxes: &[Mailbox],
+    item: &ProviderInboundHistoryItem,
+) -> Option<Mailbox> {
+    mailboxes
+        .iter()
+        .find(|mailbox| inbound_history_matches_mailbox(mailbox, item))
+        .cloned()
+}
+
+fn inbound_history_matches_mailbox(mailbox: &Mailbox, item: &ProviderInboundHistoryItem) -> bool {
+    mailbox.inbound_enabled() && item.to.iter().any(|email| email == mailbox.address())
+}
+
+fn outbound_provider_message_id(message: &OutboundMessage) -> &str {
+    message
+        .provider_message_id
+        .as_deref()
+        .or_else(|| message.timeline.last().map(|entry| entry.note.as_str()))
+        .unwrap_or("")
+}
+
+fn message_state_key(
+    user_email: &EmailAddress,
+    direction: MessageDirection,
+    provider_message_id: &str,
+) -> String {
+    format!(
+        "{}:{}:{}",
+        user_email.as_str(),
+        direction_name(direction),
+        provider_message_id
+    )
+}
+
+fn direction_name(direction: MessageDirection) -> &'static str {
+    match direction {
+        MessageDirection::Inbound => "inbound",
+        MessageDirection::Outbound => "outbound",
+    }
+}
+
 async fn load_app_data(store: &dyn AppStore) -> Result<AppData, StoreError> {
     let users = store.list_users().await?;
     let domains = store.list_domains().await?;
@@ -1218,6 +1551,7 @@ async fn load_app_data(store: &dyn AppStore) -> Result<AppData, StoreError> {
     let mailboxes = store.list_mailboxes().await?;
     let outbound_messages = store.list_outbound().await?;
     let inbound_messages = store.list_inbound().await?;
+    let message_user_states = store.list_message_user_states().await?;
     let audit_events = store.list_audit().await?;
     let webhook_bindings = webhook_bindings(&providers)?;
     Ok(AppData {
@@ -1227,6 +1561,7 @@ async fn load_app_data(store: &dyn AppStore) -> Result<AppData, StoreError> {
         mailboxes: keyed_mailboxes(mailboxes),
         outbound_messages: keyed_outbound_messages(outbound_messages),
         inbound_messages: keyed_inbound_messages(inbound_messages),
+        message_user_states: keyed_message_user_states(message_user_states),
         webhook_bindings,
         webhook_events: HashSet::new(),
         audit_events,
@@ -1279,6 +1614,22 @@ fn keyed_inbound_messages(messages: Vec<InboundMessage>) -> HashMap<String, Inbo
     messages
         .into_iter()
         .map(|message| (serialized_key(&message.id), message))
+        .collect()
+}
+
+fn keyed_message_user_states(states: Vec<MessageUserState>) -> HashMap<String, MessageUserState> {
+    states
+        .into_iter()
+        .map(|state| {
+            (
+                message_state_key(
+                    &state.user_email,
+                    state.direction,
+                    &state.provider_message_id,
+                ),
+                state,
+            )
+        })
         .collect()
 }
 
@@ -1423,6 +1774,7 @@ fn outbound_message(
     OutboundMessage {
         id: receipt.message_id,
         provider_account_id: provider.id(),
+        provider_message_id: Some(receipt.provider_message_id.clone()),
         from: request.from().clone(),
         to: request.to().to_vec(),
         subject: request.subject().to_string(),
@@ -1432,6 +1784,59 @@ fn outbound_message(
             MessageStatus::Sent,
             &receipt.provider_message_id,
         )],
+    }
+}
+
+fn outbound_history_message(
+    provider: &ProviderAccount,
+    item: ProviderOutboundHistoryItem,
+) -> OutboundMessage {
+    OutboundMessage {
+        id: rnovemail_domain::MessageId::new(),
+        provider_account_id: provider.id(),
+        provider_message_id: Some(item.provider_message_id.clone()),
+        from: item.from,
+        to: item.to,
+        subject: item.subject,
+        text: item.text,
+        status: item.status,
+        timeline: vec![timeline_entry(item.status, &item.provider_message_id)],
+    }
+}
+
+fn inbound_history_message(
+    provider_account_id: rnovemail_domain::ProviderAccountId,
+    mailbox_id: MailboxId,
+    item: ProviderInboundHistoryItem,
+) -> InboundMessage {
+    let subject = inbound_history_subject(&item);
+    let text = inbound_history_body(&item);
+    InboundMessage {
+        id: rnovemail_domain::MessageId::new(),
+        mailbox_id,
+        provider_account_id: Some(provider_account_id),
+        provider_event_id: item.provider_message_id,
+        from: item.from,
+        subject,
+        text,
+        received_at: item.received_at,
+        detail: Some(item.detail),
+    }
+}
+
+fn inbound_history_subject(item: &ProviderInboundHistoryItem) -> String {
+    if item.detail.subject.trim().is_empty() {
+        item.subject.clone()
+    } else {
+        item.detail.subject.clone()
+    }
+}
+
+fn inbound_history_body(item: &ProviderInboundHistoryItem) -> String {
+    if item.detail.text.trim().is_empty() {
+        item.text.clone()
+    } else {
+        item.detail.text.clone()
     }
 }
 

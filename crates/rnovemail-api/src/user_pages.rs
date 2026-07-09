@@ -12,7 +12,8 @@ use rnovemail_admin::{
     PageContext, PortalData, PortalMessageData, Theme,
 };
 use rnovemail_domain::{
-    EmailAddress, InboundMessage, Mailbox, MailboxId, OutboundMessage, User, UserId,
+    EmailAddress, InboundMessage, Mailbox, MailboxId, MessageDirection, MessageUserState,
+    OutboundMessage, User, UserId,
 };
 use serde::Deserialize;
 
@@ -39,6 +40,7 @@ async fn portal(
         Ok(principal) => principal,
         Err(_) => return Redirect::to(&login_location("/portal")).into_response(),
     };
+    let _ = state.sync_user_mail_history(&principal.subject).await;
     match portal_data(&state, &principal.subject) {
         Ok(data) => {
             rnovemail_admin::portal_page(&page_context(&query, "/portal"), &data).into_response()
@@ -76,11 +78,22 @@ fn portal_data(state: &AppState, email: &str) -> Result<PortalData, ApiRejection
     let mailboxes = state.list_mailboxes()?;
     let owned_mailboxes = owned_mailbox_lookup(&mailboxes, owner.id());
     let owned_addresses = owned_address_lookup(&mailboxes, owner.id());
+    let states = state.list_message_user_states()?;
     Ok(PortalData {
         email: email.as_str().to_string(),
         mailboxes: mailbox_rows(mailboxes, owner.id(), &owners),
-        inbox: inbound_rows(state.list_inbound_messages()?, &owned_mailboxes),
-        sent: outbound_rows(state.list_outbound_messages()?, &owned_addresses),
+        inbox: inbound_rows(
+            state.list_inbound_messages()?,
+            &owned_mailboxes,
+            &states,
+            &email,
+        ),
+        sent: outbound_rows(
+            state.list_outbound_messages()?,
+            &owned_addresses,
+            &states,
+            &email,
+        ),
     })
 }
 
@@ -132,19 +145,33 @@ fn mailbox_rows(
 fn inbound_rows(
     messages: Vec<InboundMessage>,
     mailboxes: &HashMap<MailboxId, String>,
+    states: &[MessageUserState],
+    user_email: &EmailAddress,
 ) -> Vec<MessageRow> {
     messages
         .into_iter()
-        .filter_map(|message| inbound_row(message, mailboxes))
+        .filter(|message| {
+            !message_deleted(
+                states,
+                user_email,
+                MessageDirection::Inbound,
+                &message.provider_event_id,
+            )
+        })
+        .filter_map(|message| inbound_row(message, mailboxes, states, user_email))
         .collect()
 }
 
 fn inbound_row(
     message: InboundMessage,
     mailboxes: &HashMap<MailboxId, String>,
+    states: &[MessageUserState],
+    user_email: &EmailAddress,
 ) -> Option<MessageRow> {
+    let provider_id = message.provider_event_id.clone();
     Some(MessageRow {
         id: serialized_key(&message.id),
+        provider_id: provider_id.clone(),
         mailbox: mailboxes.get(&message.mailbox_id)?.clone(),
         from: message.from.as_str().to_string(),
         to: String::new(),
@@ -152,20 +179,40 @@ fn inbound_row(
         text: message.text,
         status: "Received".to_string(),
         at: message.received_at.to_rfc3339(),
+        starred: message_starred(states, user_email, MessageDirection::Inbound, &provider_id),
     })
 }
 
-fn outbound_rows(messages: Vec<OutboundMessage>, addresses: &HashSet<String>) -> Vec<MessageRow> {
+fn outbound_rows(
+    messages: Vec<OutboundMessage>,
+    addresses: &HashSet<String>,
+    states: &[MessageUserState],
+    user_email: &EmailAddress,
+) -> Vec<MessageRow> {
     messages
         .into_iter()
         .filter(|message| addresses.contains(message.from.as_str()))
-        .map(outbound_row)
+        .filter(|message| {
+            !message_deleted(
+                states,
+                user_email,
+                MessageDirection::Outbound,
+                &outbound_provider_id(message),
+            )
+        })
+        .map(|message| outbound_row(message, states, user_email))
         .collect()
 }
 
-fn outbound_row(message: OutboundMessage) -> MessageRow {
+fn outbound_row(
+    message: OutboundMessage,
+    states: &[MessageUserState],
+    user_email: &EmailAddress,
+) -> MessageRow {
+    let provider_id = outbound_provider_id(&message);
     MessageRow {
         id: serialized_key(&message.id),
+        provider_id: provider_id.clone(),
         mailbox: message.from.as_str().to_string(),
         from: message.from.as_str().to_string(),
         to: message
@@ -182,7 +229,60 @@ fn outbound_row(message: OutboundMessage) -> MessageRow {
             .last()
             .map(|entry| entry.at.to_rfc3339())
             .unwrap_or_default(),
+        starred: message_starred(states, user_email, MessageDirection::Outbound, &provider_id),
     }
+}
+
+fn outbound_provider_id(message: &OutboundMessage) -> String {
+    message
+        .provider_message_id
+        .clone()
+        .or_else(|| message.timeline.last().map(|entry| entry.note.clone()))
+        .unwrap_or_else(|| serialized_key(&message.id))
+}
+
+fn message_deleted(
+    states: &[MessageUserState],
+    user_email: &EmailAddress,
+    direction: MessageDirection,
+    provider_message_id: &str,
+) -> bool {
+    message_state(states, user_email, direction, provider_message_id)
+        .map(|state| state.deleted)
+        .unwrap_or(false)
+}
+
+fn message_starred(
+    states: &[MessageUserState],
+    user_email: &EmailAddress,
+    direction: MessageDirection,
+    provider_message_id: &str,
+) -> bool {
+    message_state(states, user_email, direction, provider_message_id)
+        .map(|state| state.starred)
+        .unwrap_or(false)
+}
+
+fn message_state<'a>(
+    states: &'a [MessageUserState],
+    user_email: &EmailAddress,
+    direction: MessageDirection,
+    provider_message_id: &str,
+) -> Option<&'a MessageUserState> {
+    states
+        .iter()
+        .find(|state| state_matches(state, user_email, direction, provider_message_id))
+}
+
+fn state_matches(
+    state: &MessageUserState,
+    user_email: &EmailAddress,
+    direction: MessageDirection,
+    provider_message_id: &str,
+) -> bool {
+    state.user_email == *user_email
+        && state.direction == direction
+        && state.provider_message_id == provider_message_id
 }
 
 fn owned_message_mailbox(

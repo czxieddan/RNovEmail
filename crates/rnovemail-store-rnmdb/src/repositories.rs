@@ -12,8 +12,8 @@ use rnmdb_storage::{
     Page, PageCryptoKey, PageSize, SingleFileBackend, SingleFileOptions, StorageBackend, SyncStatus,
 };
 use rnovemail_domain::{
-    AuditEvent, DomainName, EmailAddress, InboundMessage, Mailbox, OutboundMessage,
-    ProviderAccount, User,
+    AuditEvent, DomainName, EmailAddress, InboundMessage, Mailbox, MessageDirection,
+    MessageUserState, OutboundMessage, ProviderAccount, User,
 };
 use rnovemail_store::{
     AuditRepository, DomainRepository, MailboxRepository, MessageRepository, ProviderRepository,
@@ -267,12 +267,25 @@ impl MessageRepository for RnovStore {
         )
     }
 
+    async fn put_message_user_state(&self, state: MessageUserState) -> Result<(), StoreError> {
+        put_typed(
+            self,
+            "message_user_states_by_key",
+            &message_user_state_key(&state),
+            &state,
+        )
+    }
+
     async fn list_outbound(&self) -> Result<Vec<OutboundMessage>, StoreError> {
         list_typed(self, "outbound_messages_by_id")
     }
 
     async fn list_inbound(&self) -> Result<Vec<InboundMessage>, StoreError> {
         list_typed(self, "inbound_messages_by_id")
+    }
+
+    async fn list_message_user_states(&self) -> Result<Vec<MessageUserState>, StoreError> {
+        list_typed(self, "message_user_states_by_key")
     }
 }
 
@@ -746,4 +759,20 @@ fn json_key<T: Serialize>(value: &T) -> Result<String, StoreError> {
 
 fn audit_key(event: &AuditEvent) -> String {
     format!("{}:{}", event.at.to_rfc3339(), event.request_id)
+}
+
+fn message_user_state_key(state: &MessageUserState) -> String {
+    format!(
+        "{}:{}:{}",
+        state.user_email.as_str(),
+        direction_name(state.direction),
+        state.provider_message_id
+    )
+}
+
+fn direction_name(direction: MessageDirection) -> &'static str {
+    match direction {
+        MessageDirection::Inbound => "inbound",
+        MessageDirection::Outbound => "outbound",
+    }
 }

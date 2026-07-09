@@ -5,8 +5,9 @@ mod routing;
 
 pub use errors::ProviderError;
 pub use provider::{
-    MailProvider, ProviderEvent, ProviderSendReceipt, ProviderWebhookRequest, SendMailRequest,
-    SendMailRequestBuilder, VerifiedWebhook,
+    MailProvider, ProviderEvent, ProviderInboundHistoryItem, ProviderOutboundHistoryItem,
+    ProviderSendReceipt, ProviderWebhookRequest, SendMailRequest, SendMailRequestBuilder,
+    VerifiedWebhook,
 };
 pub use resend::ResendProvider;
 pub use routing::ProviderRegistry;

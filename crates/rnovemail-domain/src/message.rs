@@ -29,6 +29,12 @@ pub enum MessageStatus {
     Failed,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+pub enum MessageDirection {
+    Inbound,
+    Outbound,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct MessageTimelineEntry {
     pub status: MessageStatus,
@@ -40,6 +46,8 @@ pub struct MessageTimelineEntry {
 pub struct OutboundMessage {
     pub id: MessageId,
     pub provider_account_id: ProviderAccountId,
+    #[serde(default)]
+    pub provider_message_id: Option<String>,
     pub from: EmailAddress,
     pub to: Vec<EmailAddress>,
     pub subject: String,
@@ -96,4 +104,37 @@ pub struct InboundMessageAttachment {
 pub struct InboundMessageRaw {
     pub download_url: String,
     pub expires_at: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct MessageUserState {
+    pub user_email: EmailAddress,
+    pub direction: MessageDirection,
+    pub provider_message_id: String,
+    pub starred: bool,
+    pub deleted: bool,
+}
+
+impl MessageUserState {
+    pub fn new(
+        user_email: EmailAddress,
+        direction: MessageDirection,
+        provider_message_id: impl Into<String>,
+    ) -> Self {
+        Self {
+            user_email,
+            direction,
+            provider_message_id: provider_message_id.into(),
+            starred: false,
+            deleted: false,
+        }
+    }
+
+    pub fn set_starred(&mut self, starred: bool) {
+        self.starred = starred;
+    }
+
+    pub fn mark_deleted(&mut self) {
+        self.deleted = true;
+    }
 }

@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use rnovemail_domain::{
-    AuditEvent, DomainName, EmailAddress, InboundMessage, Mailbox, OutboundMessage,
-    ProviderAccount, User,
+    AuditEvent, DomainName, EmailAddress, InboundMessage, Mailbox, MessageUserState,
+    OutboundMessage, ProviderAccount, User,
 };
 
 use crate::StoreError;
@@ -39,8 +39,10 @@ pub trait ProviderRepository: Send + Sync {
 pub trait MessageRepository: Send + Sync {
     async fn put_outbound(&self, message: OutboundMessage) -> Result<(), StoreError>;
     async fn put_inbound(&self, message: InboundMessage) -> Result<(), StoreError>;
+    async fn put_message_user_state(&self, state: MessageUserState) -> Result<(), StoreError>;
     async fn list_outbound(&self) -> Result<Vec<OutboundMessage>, StoreError>;
     async fn list_inbound(&self) -> Result<Vec<InboundMessage>, StoreError>;
+    async fn list_message_user_states(&self) -> Result<Vec<MessageUserState>, StoreError>;
 }
 
 #[async_trait]

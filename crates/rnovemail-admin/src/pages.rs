@@ -267,6 +267,183 @@ button.secondary {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.mail-app {
+  min-height: 100vh;
+}
+.mail-topbar {
+  align-items: center;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+  display: grid;
+  gap: 16px;
+  grid-template-columns: minmax(190px, 260px) minmax(260px, 1fr) auto;
+  min-height: 68px;
+  padding: 0 24px;
+  position: sticky;
+  top: 0;
+  z-index: 30;
+}
+.mail-brand {
+  align-items: center;
+  display: flex;
+  font-size: 18px;
+  font-weight: 800;
+  gap: 10px;
+}
+.mail-primary-nav {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+}
+.mail-user {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+}
+.mail-address {
+  color: var(--muted);
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.avatar-menu {
+  position: relative;
+}
+.avatar-menu summary {
+  list-style: none;
+}
+.avatar-menu summary::-webkit-details-marker {
+  display: none;
+}
+.avatar-button {
+  border-radius: 999px;
+  height: 42px;
+  padding: 0;
+  width: 42px;
+}
+.mail-menu {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+  display: grid;
+  gap: 8px;
+  min-width: 190px;
+  padding: 10px;
+  position: absolute;
+  right: 0;
+  top: calc(100% + 10px);
+}
+.mail-menu .button,
+.mail-menu button {
+  justify-content: flex-start;
+  width: 100%;
+}
+.mail-main {
+  display: grid;
+  gap: 16px;
+  margin: 0 auto;
+  max-width: 1180px;
+  padding: 22px 24px 40px;
+}
+.mail-summary {
+  align-items: center;
+  display: flex;
+  gap: 14px;
+  justify-content: space-between;
+}
+.mail-pane {
+  display: none;
+}
+.mail-pane[data-active="true"] {
+  display: block;
+}
+.mail-list {
+  display: grid;
+  gap: 1px;
+  margin-top: 14px;
+}
+.mail-row {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  display: grid;
+  gap: 12px;
+  grid-template-columns: auto minmax(160px, 220px) minmax(0, 1fr) auto;
+  padding: 12px;
+}
+.mail-row:first-child {
+  border-radius: 8px 8px 0 0;
+}
+.mail-row:last-child {
+  border-radius: 0 0 8px 8px;
+}
+.mail-row-actions {
+  align-items: start;
+  display: flex;
+  gap: 6px;
+}
+.mail-icon {
+  background: transparent;
+  border: 1px solid var(--line);
+  color: var(--ink);
+  min-height: 34px;
+  min-width: 34px;
+  padding: 0;
+}
+.mail-icon[aria-pressed="true"] {
+  background: var(--blue-soft);
+  color: var(--blue);
+}
+.mail-participant {
+  color: var(--ink);
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mail-content {
+  min-width: 0;
+}
+.mail-subject {
+  color: var(--ink);
+  font-weight: 750;
+}
+.mail-preview {
+  color: var(--muted);
+  margin: 3px 0 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.message-details {
+  color: var(--muted);
+  margin-top: 8px;
+}
+.message-details summary {
+  cursor: pointer;
+  font-weight: 700;
+}
+.message-details dl {
+  display: grid;
+  gap: 6px 12px;
+  grid-template-columns: max-content minmax(0, 1fr);
+  margin: 8px 0 0;
+}
+.message-details dt {
+  color: var(--ink);
+  font-weight: 700;
+}
+.message-details dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.compose-actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
 .form-grid {
   display: grid;
   gap: 14px;
@@ -341,6 +518,12 @@ button.secondary {
   .main { padding: 20px; }
   .topbar { align-items: stretch; flex-direction: column; }
   .settings-menu { left: 0; right: auto; }
+  .mail-topbar { grid-template-columns: 1fr; padding: 14px 18px; position: static; }
+  .mail-primary-nav { justify-content: flex-start; overflow-x: auto; }
+  .mail-user { justify-content: space-between; }
+  .mail-row { grid-template-columns: auto minmax(0, 1fr); }
+  .mail-row-actions { grid-column: 1; grid-row: 1 / span 2; }
+  .mail-content { grid-column: 2; }
   .actions,
   .mail-toolbar,
   .form-grid,
@@ -350,7 +533,10 @@ button.secondary {
 }
 "#;
 
-const ADMIN_JS: &str = r#"
+const ADMIN_JS: &str = r##"
+setupMailPanes();
+setupDraftActions();
+
 document.querySelectorAll("[data-draft-key]").forEach((form) => {
   restoreDraft(form);
   form.addEventListener("input", () => saveDraft(form));
@@ -404,7 +590,7 @@ function formPayload(form) {
     const text = String(value).trim();
     if (!text) return;
     if (key === "domains" || key === "roles" || key === "to") payload[key] = splitList(text);
-    else if (key === "enabled" || key.endsWith("_enabled")) payload[key] = text === "true";
+    else if (key === "enabled" || key === "starred" || key.endsWith("_enabled")) payload[key] = text === "true";
     else payload[key] = text;
   });
   return payload;
@@ -462,7 +648,70 @@ function redirectToLogin(form) {
   const theme = document.documentElement.dataset.theme || "light";
   location.href = `/login?scope=${scope}&next=${next}&lang=${lang}&theme=${theme}`;
 }
-"#;
+
+function setupMailPanes() {
+  const panes = Array.from(document.querySelectorAll("[data-mail-pane]"));
+  if (panes.length === 0) return;
+  const activate = () => {
+    const selected = (location.hash || "#inbox").slice(1);
+    panes.forEach((pane) => {
+      pane.dataset.active = pane.id === selected ? "true" : "false";
+    });
+  };
+  window.addEventListener("hashchange", activate);
+  activate();
+}
+
+function setupDraftActions() {
+  document.querySelectorAll("[data-draft-action]").forEach((button) => {
+    button.addEventListener("click", () => handleDraftAction(button));
+  });
+  document.querySelectorAll("[data-close-compose]").forEach((button) => {
+    button.addEventListener("click", () => closeCompose(button));
+  });
+}
+
+function handleDraftAction(button) {
+  const form = draftForm(button);
+  if (!form) return;
+  if (button.dataset.draftAction === "save") saveDraft(form);
+  if (button.dataset.draftAction === "open") openDraft(form);
+  if (button.dataset.draftAction === "discard") discardDraft(form, button);
+  const status = form.querySelector("[data-form-status]");
+  if (button.dataset.draftAction === "save") setStatus(status, button.dataset.savedText || "Saved", "ok");
+}
+
+function openDraft(form) {
+  restoreDraft(form);
+  location.hash = draftTarget(form);
+}
+
+function discardDraft(form, button) {
+  if (button.dataset.confirm && !confirm(button.dataset.confirm)) return;
+  clearDraft(form);
+  form.reset();
+}
+
+function closeCompose(button) {
+  const form = draftForm(button);
+  if (form && hasDraftContent(form)) {
+    if (confirm(button.dataset.saveConfirm || "")) saveDraft(form);
+    else clearDraft(form);
+  }
+  location.hash = "inbox";
+}
+
+function draftForm(button) {
+  return document.getElementById(button.dataset.draftForm || "portal-compose");
+}
+
+function hasDraftContent(form) {
+  return ["to", "subject", "text", "html"].some((name) => {
+    const field = form.elements.namedItem(name);
+    return field && String(field.value).trim().length > 0;
+  });
+}
+"##;
 
 pub fn login_page(ctx: &PageContext, scope: LoginScopeView, failed: bool) -> Markup {
     base_page(
@@ -505,57 +754,30 @@ pub fn login_page(ctx: &PageContext, scope: LoginScopeView, failed: bool) -> Mar
 }
 
 pub fn portal_page(ctx: &PageContext, data: &PortalData) -> Markup {
-    app_layout(
+    portal_layout(
         ctx,
         text(ctx.lang, Text::Portal),
-        false,
+        &data.email,
         html! {
-            section class="panel mail-toolbar" {
+            section class="panel mail-summary" {
                 div {
                     h2 { (data.email) }
                     p { (text(ctx.lang, Text::Mailboxes)) ": " (data.mailboxes.len()) }
                 }
-                a class="button" href="#compose" {
-                    (text(ctx.lang, Text::Compose))
-                }
+                a class="button" href="#compose" { (text(ctx.lang, Text::Compose)) }
             }
+            (message_list(ctx, "inbox", Text::Inbox, &data.inbox, true, true))
+            (message_list(ctx, "sent", Text::Sent, &data.sent, false, false))
             (compose_form(ctx, data))
-            section class="panel" {
-                h2 { (text(ctx.lang, Text::Mailboxes)) }
-                div class="table-wrap" {
-                    table class="table" {
-                        thead {
-                            tr {
-                                th { (text(ctx.lang, Text::Mailboxes)) }
-                                th { (text(ctx.lang, Text::Status)) }
-                                th { (text(ctx.lang, Text::Inbound)) }
-                                th { (text(ctx.lang, Text::Outbound)) }
-                            }
-                        }
-                        tbody {
-                            @for mailbox in &data.mailboxes {
-                                tr {
-                                    td { (&mailbox.email) }
-                                    td { (&mailbox.status) }
-                                    td { (bool_text(ctx.lang, mailbox.inbound_enabled)) }
-                                    td { (bool_text(ctx.lang, mailbox.outbound_enabled)) }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            (message_table(ctx, Text::Inbox, &data.inbox, true))
-            (message_table(ctx, Text::Sent, &data.sent, false))
         },
     )
 }
 
 pub fn portal_message_page(ctx: &PageContext, data: &crate::PortalMessageData) -> Markup {
-    app_layout(
+    portal_layout(
         ctx,
         &data.message.subject,
-        false,
+        &data.email,
         html! {
             section class="panel accent" {
                 div class="actions" {
@@ -596,10 +818,10 @@ pub fn portal_message_page(ctx: &PageContext, data: &crate::PortalMessageData) -
 
 fn compose_form(ctx: &PageContext, data: &PortalData) -> Markup {
     html! {
-        section id="compose" class="panel accent compose-panel" {
+        section id="compose" class="panel accent compose-panel mail-pane" data-mail-pane="" data-active="false" {
             div class="compose-heading" {
                 h2 { (text(ctx.lang, Text::Compose)) }
-                a class="button secondary" href=(localized_path(ctx, "/portal")) {
+                button class="button secondary" type="button" data-close-compose="" data-save-confirm=(text(ctx.lang, Text::SaveDraftConfirm)) {
                     (text(ctx.lang, Text::Back))
                 }
             }
@@ -618,60 +840,99 @@ fn compose_form(ctx: &PageContext, data: &PortalData) -> Markup {
                     (text(ctx.lang, Text::Body))
                     textarea name="text" required {}
                 }
-                (submit_row(ctx, Text::Send))
+                div class="span-2 compose-actions" {
+                    button type="submit" { (text(ctx.lang, Text::Send)) }
+                    button class="secondary" type="button" data-draft-action="save" data-draft-form="portal-compose" data-saved-text=(text(ctx.lang, Text::SaveDraft)) {
+                        (text(ctx.lang, Text::SaveDraft))
+                    }
+                    button class="secondary" type="button" data-draft-action="discard" data-draft-form="portal-compose" data-confirm=(text(ctx.lang, Text::DiscardDraftConfirm)) {
+                        (text(ctx.lang, Text::DiscardDraft))
+                    }
+                }
+                p class="status span-2" data-form-status="" {}
             }
         }
     }
 }
 
-fn message_table(
+fn message_list(
     ctx: &PageContext,
+    id: &str,
     title: Text,
     messages: &[crate::MessageRow],
     inbound: bool,
+    active: bool,
 ) -> Markup {
     html! {
-        section class="panel" {
-            h2 { (text(ctx.lang, title)) }
-            div class="table-wrap" {
-                table class="table" {
-                    thead {
-                        tr {
-                            th { (text(ctx.lang, Text::Email)) }
-                            th { (if inbound { text(ctx.lang, Text::From) } else { text(ctx.lang, Text::To) }) }
-                            th { (text(ctx.lang, Text::Subject)) }
-                            th { (text(ctx.lang, Text::Status)) }
-                            @if inbound {
-                                th { (text(ctx.lang, Text::Details)) }
-                            }
-                        }
-                    }
-                    tbody {
-                        @for message in messages {
-                            tr {
-                                td { (&message.mailbox) }
-                                td {
-                                    @if inbound { (&message.from) } @else { (&message.to) }
-                                }
-                                td {
-                                    div class="message-subject" {
-                                        strong { (&message.subject) }
-                                        p class="message-snippet" { (&message.text) }
-                                    }
-                                }
-                                td { (message_status_text(ctx, &message.status)) }
-                                @if inbound {
-                                    td {
-                                        a class="button secondary" href=(localized_path(ctx, &format!("/portal/inbound/{}", message.id))) {
-                                            (text(ctx.lang, Text::Details))
-                                        }
-                                    }
-                                }
-                            }
-                        }
+        section id=(id) class="mail-pane" data-mail-pane="" data-active=(if active { "true" } else { "false" }) {
+            div class="panel" {
+                h2 { (text(ctx.lang, title)) }
+                div class="mail-list" {
+                    @for message in messages {
+                        (message_row(ctx, message, inbound))
                     }
                 }
             }
+        }
+    }
+}
+
+fn message_row(ctx: &PageContext, message: &crate::MessageRow, inbound: bool) -> Markup {
+    html! {
+        article class="mail-row" {
+            div class="mail-row-actions" {
+                (favorite_form(ctx, message, inbound))
+                (delete_message_form(ctx, message, inbound))
+            }
+            div class="mail-participant" {
+                @if inbound { (&message.from) } @else { (&message.to) }
+            }
+            div class="mail-content" {
+                div class="mail-subject" { (&message.subject) }
+                p class="mail-preview" { (&message.text) }
+                (message_details(ctx, message, inbound))
+            }
+            div class="status" { (message_status_text(ctx, &message.status)) }
+        }
+    }
+}
+
+fn message_details(ctx: &PageContext, message: &crate::MessageRow, inbound: bool) -> Markup {
+    html! {
+        details class="message-details" {
+            summary { (text(ctx.lang, Text::Details)) }
+            dl {
+                dt { (text(ctx.lang, Text::Email)) } dd { (&message.mailbox) }
+                dt { (text(ctx.lang, Text::From)) } dd { (&message.from) }
+                dt { (text(ctx.lang, Text::To)) } dd { (&message.to) }
+                dt { (text(ctx.lang, Text::ReceivedAt)) } dd { (&message.at) }
+                dt { (text(ctx.lang, Text::ProviderId)) } dd { code class="endpoint" { (&message.provider_id) } }
+            }
+            @if inbound {
+                a class="button secondary" href=(localized_path(ctx, &format!("/portal/inbound/{}", message.id))) {
+                    (text(ctx.lang, Text::Details))
+                }
+            }
+        }
+    }
+}
+
+fn favorite_form(ctx: &PageContext, message: &crate::MessageRow, inbound: bool) -> Markup {
+    let next_state = (!message.starred).to_string();
+    html! {
+        form data-api-form="" data-reset="false" data-reload="true" data-endpoint=(favorite_endpoint(message, inbound)) {
+            input type="hidden" name="starred" value=(next_state);
+            button class="mail-icon" type="submit" aria-pressed=(message.starred.to_string()) {
+                (if message.starred { text(ctx.lang, Text::Unfavorite) } else { text(ctx.lang, Text::Favorite) })
+            }
+        }
+    }
+}
+
+fn delete_message_form(ctx: &PageContext, message: &crate::MessageRow, inbound: bool) -> Markup {
+    html! {
+        form data-api-form="" data-reset="false" data-reload="true" data-method="DELETE" data-endpoint=(message_endpoint(message, inbound)) {
+            button class="mail-icon" type="submit" { (text(ctx.lang, Text::Delete)) }
         }
     }
 }
@@ -797,6 +1058,33 @@ fn message_status_text<'a>(ctx: &PageContext, status: &'a str) -> &'a str {
         "Sent" => text(ctx.lang, Text::Sent),
         _ => status,
     }
+}
+
+fn favorite_endpoint(message: &crate::MessageRow, inbound: bool) -> String {
+    format!("{}/favorite", message_endpoint(message, inbound))
+}
+
+fn message_endpoint(message: &crate::MessageRow, inbound: bool) -> String {
+    format!(
+        "/api/v1/portal/mail/{}/{}",
+        direction_path(inbound),
+        message.provider_id
+    )
+}
+
+fn direction_path(inbound: bool) -> &'static str {
+    match inbound {
+        true => "inbound",
+        false => "outbound",
+    }
+}
+
+fn avatar_label(email: &str) -> String {
+    email
+        .chars()
+        .next()
+        .map(|value| value.to_ascii_uppercase().to_string())
+        .unwrap_or_else(|| "R".to_string())
 }
 
 pub fn admin_page(ctx: &PageContext, section: AdminSection, data: &AdminData) -> Markup {
@@ -1075,6 +1363,63 @@ fn audit(ctx: &PageContext, data: &AdminData) -> Markup {
     }
 }
 
+fn portal_layout(ctx: &PageContext, title: &str, email: &str, content: Markup) -> Markup {
+    base_page(
+        ctx,
+        title,
+        html! {
+            a class="skip" href="#content" { "Skip" }
+            div class="mail-app" {
+                (mail_topbar(ctx, email))
+                main id="content" class="mail-main" {
+                    (content)
+                }
+            }
+            script { (PreEscaped(ADMIN_JS)) }
+        },
+    )
+}
+
+fn mail_topbar(ctx: &PageContext, email: &str) -> Markup {
+    html! {
+        header class="mail-topbar" {
+            a class="mail-brand" href=(localized_path(ctx, "/portal")) {
+                span class="mark" aria-hidden="true" { "R" }
+                span { "RNovEmail" }
+            }
+            nav class="mail-primary-nav" aria-label=(text(ctx.lang, Text::Portal)) {
+                a class="button secondary" href="#inbox" { (text(ctx.lang, Text::Inbox)) }
+                a class="button secondary" href="#sent" { (text(ctx.lang, Text::Sent)) }
+                a class="button" href="#compose" { (text(ctx.lang, Text::Compose)) }
+                button class="button secondary" type="button" data-draft-action="open" data-draft-form="portal-compose" {
+                    (text(ctx.lang, Text::Drafts))
+                }
+            }
+            div class="mail-user" {
+                span class="mail-address" { (email) }
+                (avatar_menu(ctx, email))
+            }
+        }
+    }
+}
+
+fn avatar_menu(ctx: &PageContext, email: &str) -> Markup {
+    html! {
+        details class="avatar-menu" {
+            summary class="button avatar-button" aria-label=(text(ctx.lang, Text::Settings)) {
+                (avatar_label(email))
+            }
+            div class="mail-menu" {
+                (language_links(ctx))
+                (theme_link(ctx))
+                form method="post" action="/logout" {
+                    button class="secondary" type="submit" { (text(ctx.lang, Text::Logout)) }
+                }
+            }
+        }
+    }
+}
+
 fn app_layout(ctx: &PageContext, title: &str, admin: bool, content: Markup) -> Markup {
     base_page(
         ctx,
@@ -1234,13 +1579,6 @@ fn title(lang: Lang, section: AdminSection) -> &'static str {
         AdminSection::Mailboxes => text(lang, Text::Mailboxes),
         AdminSection::Providers => text(lang, Text::Providers),
         AdminSection::Users => text(lang, Text::Users),
-    }
-}
-
-fn bool_text(lang: Lang, value: bool) -> &'static str {
-    match value {
-        true => text(lang, Text::Enabled),
-        false => text(lang, Text::Disabled),
     }
 }
 

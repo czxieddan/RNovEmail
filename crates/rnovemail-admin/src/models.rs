@@ -84,6 +84,7 @@ pub struct PortalData {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MessageRow {
     pub id: String,
+    pub provider_id: String,
     pub mailbox: String,
     pub from: String,
     pub to: String,
@@ -91,6 +92,7 @@ pub struct MessageRow {
     pub text: String,
     pub status: String,
     pub at: String,
+    pub starred: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

@@ -1,5 +1,8 @@
 use async_trait::async_trait;
-use rnovemail_domain::{EmailAddress, MessageId, ProviderType};
+use chrono::{DateTime, Utc};
+use rnovemail_domain::{
+    EmailAddress, InboundMessageDetail, MessageId, MessageStatus, ProviderType,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::ProviderError;
@@ -111,6 +114,29 @@ fn reject_empty_recipients(recipients: &[EmailAddress]) -> Result<(), ProviderEr
 pub struct ProviderSendReceipt {
     pub message_id: MessageId,
     pub provider_message_id: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProviderOutboundHistoryItem {
+    pub provider_message_id: String,
+    pub from: EmailAddress,
+    pub to: Vec<EmailAddress>,
+    pub subject: String,
+    pub text: String,
+    pub html: Option<String>,
+    pub status: MessageStatus,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProviderInboundHistoryItem {
+    pub provider_message_id: String,
+    pub from: EmailAddress,
+    pub to: Vec<EmailAddress>,
+    pub subject: String,
+    pub text: String,
+    pub detail: InboundMessageDetail,
+    pub received_at: DateTime<Utc>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
